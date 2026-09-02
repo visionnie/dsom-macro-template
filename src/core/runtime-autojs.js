@@ -25,7 +25,11 @@ function getErrorDetail(error) {
   if (!error) {
     return "未知错误";
   }
-  return error.stack ? String(error.stack) : String(error);
+  // AutoJs6 的 Rhino 引擎里 error.stack 只有调用栈、不含消息本身，
+  // 只取 stack 会把"为什么失败"整句丢掉，报告里只剩一串行号。
+  var message = error.message ? String(error.message) : String(error);
+  var stack = error.stack ? String(error.stack) : "";
+  return stack ? message + "\n" + stack : message;
 }
 
 function run(config, task) {
@@ -90,17 +94,44 @@ function run(config, task) {
       }
     }
 
-    if (task.requiresCapture !== false) {
+    // 有的应用会在启动那一刻检测是否有录屏，发现就自行退出（已在囧游村盒子上实测复现）。
+    // 这类任务必须先启动应用、后申请截图权限，顺序反了应用起不来。
+    var captureAfterLaunch = task.captureAfterLaunch === true;
+    var needsCapture = task.requiresCapture !== false;
+
+    if (needsCapture && !captureAfterLaunch) {
       screen.requestPermission();
     }
+
     if (task.launchGame !== false) {
       if (!config.game || !config.game.packageName) {
         throw new Error("当前任务需要启动游戏，请先配置 game.packageName");
       }
-      actions.launchPackageAndWait(
-        config.game.packageName,
-        config.runtime.launchTimeoutMs
-      );
+      if (captureAfterLaunch) {
+        // 此时还没有截图权限，无法用画面判断前台，只能等固定时间，
+        // 再由任务的第一个步骤自行校验落在了预期页面。
+        actions.launchPackage(config.game.packageName);
+        var settleMs = config.runtime.launchSettleMs || 15000;
+        logger.info("等待应用启动 " + settleMs + " 毫秒后再申请截图权限");
+        sleep(settleMs);
+      } else {
+        actions.launchPackageAndWait(
+          config.game.packageName,
+          config.runtime.launchTimeoutMs,
+          {
+            // 任务可选地提供画面判断，用于包名查询被 ROM 屏蔽的设备。
+            confirmForeground: task.confirmForeground
+              ? function () {
+                  return task.confirmForeground(context);
+                }
+              : null
+          }
+        );
+      }
+    }
+
+    if (needsCapture && captureAfterLaunch) {
+      screen.requestPermission();
     }
 
     result.steps = task.run(context) || [];

@@ -8,6 +8,7 @@
 
 - `.docs/PROJECT.md`：项目定位与复用方式
 - `.docs/RULES.md`：代码和任务边界
+- `.docs/CASE-SCHEMA.md`：可回放用例的数据结构契约
 - `.docs/HANDOFF.md`：当前进度与下一步
 - `src/README.md`：AutoJs6 接入步骤
 

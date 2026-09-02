@@ -24,6 +24,7 @@
 ```text
 src/config/   当前游戏的项目级配置
 src/core/     所有游戏可复用的运行时
+src/core/case 可回放用例的结构契约，见 .docs/CASE-SCHEMA.md
 src/entry/    AutoJs6 单文件打包入口
 src/tasks/    当前游戏的业务任务
 src/assets/   当前游戏的找图素材

@@ -12,6 +12,8 @@ module.exports = {
     packageName: ""
   },
   outputRoot: "/sdcard/Download/dsom-macro-template",
+  // 找图素材在设备上的根目录。src/assets/ 不进单文件打包，需要单独推送到这里。
+  assetsRoot: "/sdcard/dsom-macro-template/assets",
   screen: {
     width: 0,
     height: 0,
