@@ -22,6 +22,10 @@ param(
     # 安装后立即启动（隐含 -Install）。
     [switch]$Launch,
 
+    # 把 APK 从手机拉回 dist/apk/。打包产物本来只存在于手机上，
+    # 只有需要分发或存档时才拉回来（40MB 走公网要几十秒）。
+    [switch]$PullApk,
+
     # 等待手机上完成打包的上限（分钟）。
     [int]$WaitMinutes = 10
 )
@@ -138,6 +142,16 @@ while ((Get-Date) -lt $stableDeadline) {
 
 Write-Host "打包完成: $apkPath" -ForegroundColor Green
 Write-Host "  大小: $([math]::Round($lastSize / 1MB, 1)) MB"
+Write-Host "  注意：APK 生成在手机上，PC 上没有 build 目录。需要拉回请加 -PullApk。"
+
+if ($PullApk) {
+    $localApkDir = Join-Path $projectRoot 'dist\apk'
+    New-Item -ItemType Directory -Force $localApkDir | Out-Null
+    Invoke-Adb @('pull', $apkPath, $localApkDir) | Out-Null
+    $localApk = Join-Path $localApkDir $newApk
+    if (-not (Test-Path $localApk)) { throw "拉取 APK 失败: $apkPath" }
+    Write-Host "已拉回: $localApk" -ForegroundColor Green
+}
 
 # ---- 安装 ----
 if (-not $Install) {

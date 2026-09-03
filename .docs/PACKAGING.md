@@ -20,7 +20,10 @@ build/<名称>_v<版本>.apk  生成的独立 APK
 打包动作只能在手机上的 AutoJs6 里完成。VSCode 插件提供了新建、保存、运行项目，
 但**没有打包命令**，无法从 PC 触发。
 
-APK 落在**项目目录下的 `build/`**，命名为 `<应用名>_v<版本名>.apk`，
+**APK 只生成在手机上，PC 上不会出现 build 目录。**
+PC 上的 `dist/project/` 是推上去的源料，不是产物。
+
+APK 落在**手机项目目录下的 `build/`**，命名为 `<应用名>_v<版本名>.apk`，
 例如 `/sdcard/rxfs-project/build/RXFS_v1.0.0.apk`。该路径在打包界面可改。
 
 APK 本就在设备上，安装时直接用设备路径，不必回传 PC（40MB 走公网要几十秒）：
@@ -44,6 +47,7 @@ adb -s <设备地址> shell pm install -r /sdcard/rxfs-project/build/RXFS_v1.0.0
 | `-Install` | 打包完成后自动安装 |
 | `-Launch` | 安装后启动，隐含 `-Install` |
 | `-SkipGenerate` | 跳过 `npm run project`，用现有 `dist/project` |
+| `-PullApk` | 把 APK 从手机拉回 `dist/apk/`；不加则只留在手机上 |
 | `-WaitMinutes` | 等待手机端打包的上限，默认 10 |
 
 脚本会先清空设备上的项目目录（含 `build/`）。原因是版本号不变时新旧 APK 同名，
