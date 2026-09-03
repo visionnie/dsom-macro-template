@@ -12,8 +12,9 @@ module.exports = {
     packageName: ""
   },
   outputRoot: "/sdcard/Download/dsom-macro-template",
-  // 找图素材在设备上的根目录。src/assets/ 不进单文件打包，需要单独推送到这里。
-  assetsRoot: "/sdcard/dsom-macro-template/assets",
+  // 找图素材相对当前脚本的位置。以 . 开头表示相对模式，由运行时用 files.path 解析。
+  // 开发时把脚本和 assets 放在设备同一目录下，打包成 APK 后两者也在一起。
+  assetsRoot: "./assets",
   screen: {
     width: 0,
     height: 0,

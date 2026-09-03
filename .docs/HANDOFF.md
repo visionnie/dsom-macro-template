@@ -83,5 +83,25 @@
 - **`launchPackageAndWait` 让不可靠的包名判断抢先返回。** 屏蔽包名查询的 ROM 会给出假阳性
   （应用没起来就报已在前台）。改为：任务提供了 `confirmForeground` 时以画面判断为准。
 
+## Iteration 5 - 打包成独立 APK
+
+**日期**：2026-09-03
+**状态**：全链路实测通过
+
+目标形态确认为：脚本作为独立 APK 跑在手机上，不依赖 AutoJs6 也不依赖 PC，
+PC 只用于开发调试。为此新增：
+
+- `src/core/runtime` 增加 `context.assetPath`，素材路径支持相对模式。
+  配置统一改为 `assetsRoot: "./assets"`，开发时脚本与素材同目录，打包后同样同级，
+  两种形态用同一份配置。绝对路径在打包后必然找不到素材。
+- 新增 `.docs/script/build-autojs-project.js` 与 `npm run project`，
+  生成 `dist/project/`（main.js + assets/ + project.json）。
+- 新增 `.docs/PACKAGING.md` 记录实测得到的 `project.json` 真实字段。
+  重点：支持库由 `libs` 控制且**必须含 OpenCV**，否则找图静默失效；
+  VSCode 插件模板里的 `optimization.removeOpenCv` 并非真实字段。
+
+实测结果：生成的项目被 AutoJs6 识别为项目，打包界面自动读取全部配置并预勾 OpenCV
+与 arm64-v8a，产出 41.9 MB 的 APK，安装后独立运行登录用例，9 步全绿。
+
 ## Next Action
-- 用第二、第三条真实用例（日常任务、定时活动）继续检验 CASE-SCHEMA，再一次性改结构。
+- 解决无人值守的最后一环：截图授权每次都要确认，需要常驻脚本在进程内循环而非反复拉起。

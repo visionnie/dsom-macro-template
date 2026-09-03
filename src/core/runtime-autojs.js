@@ -21,6 +21,23 @@ function validateConfig(config) {
   }
 }
 
+// 素材定位有两种形态，任务不应该关心当前是哪一种：
+// 开发时素材单独推到设备的绝对路径（如 /sdcard/dsom-macro-rxfs/assets）；
+// 打包成 APK 后素材随脚本一起进包，只能用相对当前脚本的路径。
+// 约定：assetsRoot 以 . 开头即为相对模式，交给 files.path 解析。
+function createAssetResolver(config) {
+  var assetsRoot = config.assetsRoot || "";
+  var isRelative = assetsRoot.charAt(0) === ".";
+
+  return function (relativePath) {
+    if (!assetsRoot) {
+      throw new Error("项目配置缺少 assetsRoot，无法定位找图素材");
+    }
+    var fullPath = assetsRoot + "/" + relativePath;
+    return isRelative ? files.path(fullPath) : fullPath;
+  };
+}
+
 function getErrorDetail(error) {
   if (!error) {
     return "未知错误";
@@ -56,7 +73,8 @@ function run(config, task) {
     actions: actions,
     ocr: ocr,
     workflow: workflow,
-    outputDir: outputDir
+    outputDir: outputDir,
+    assetPath: createAssetResolver(config)
   };
   var result = {
     projectId: config.project.id,

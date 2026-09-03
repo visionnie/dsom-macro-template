@@ -5,6 +5,7 @@
   "description": "DSOM 可复用 AutoJs6 游戏自动化项目模板",
   "scripts": {
     "build": "node .docs/script/build-autojs-bundles.js",
-    "check": "node .docs/script/check-autojs-project.js"
+    "check": "node .docs/script/check-autojs-project.js",
+    "project": "node .docs/script/build-autojs-bundles.js && node .docs/script/build-autojs-project.js"
   }
 }
