@@ -31,6 +31,7 @@ const genericPaths = [
   ".docs/script/create-game-project.js",
   ".docs/script/commit-push.ps1",
   ".docs/script/package-apk.ps1",
+  ".docs/script/collect-logs.ps1",
   "src/README.md",
   "src/assets/README.md",
   "src/config/game-config-autojs.js",

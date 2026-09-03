@@ -38,6 +38,42 @@ function createAssetResolver(config) {
   };
 }
 
+// 把脚本自身切回前台。仅用于申请截图权限之前：
+// 无论是 AutoJs6 里运行还是打包成独立 APK，context.getPackageName() 都能拿到当前宿主包名。
+function bringSelfToForeground(logger, config) {
+  try {
+    var selfPackage = context.getPackageName();
+    logger.info("将脚本自身切回前台以申请截图权限: " + selfPackage);
+    app.launchPackage(selfPackage);
+    sleep(config.runtime.foregroundSettleMs || 3000);
+  } catch (error) {
+    // 切不回去也继续尝试申请，失败时由 requestPermission 报出明确原因。
+    logger.warn("切回前台失败，仍尝试申请截图权限: " + error);
+  }
+}
+
+// AutoJs6 内部对「拉起截图授权窗口」有 5 秒硬超时，本机实测拉起耗时正好卡在这条线上，
+// 表现为超时抛错、而弹窗随后才显示出来。切前台后多等一会，并允许重试几次。
+function requestCaptureAfterLaunch(screen, logger, config) {
+  var maxAttempts = config.runtime.capturePermissionAttempts || 3;
+
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    bringSelfToForeground(logger, config);
+    try {
+      screen.requestPermission();
+      return;
+    } catch (error) {
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      logger.warn(
+        "第 " + attempt + " 次申请截图权限失败，重试: " + (error.message || error)
+      );
+      sleep(2000);
+    }
+  }
+}
+
 function getErrorDetail(error) {
   if (!error) {
     return "未知错误";
@@ -132,6 +168,7 @@ function run(config, task) {
         var settleMs = config.runtime.launchSettleMs || 15000;
         logger.info("等待应用启动 " + settleMs + " 毫秒后再申请截图权限");
         sleep(settleMs);
+
       } else {
         actions.launchPackageAndWait(
           config.game.packageName,
@@ -149,7 +186,15 @@ function run(config, task) {
     }
 
     if (needsCapture && captureAfterLaunch) {
-      screen.requestPermission();
+      // 目标应用已经抢到前台，脚本自身退到了后台，而 Android 不允许后台应用拉起权限弹窗。
+      // 这里负责把自己切回前台后再申请，并处理拉起窗口偏慢导致的超时。
+      requestCaptureAfterLaunch(screen, logger, config);
+      // 授权过程把目标应用挤到了后台，重新拉回前台。
+      // 进程还在，只是切换窗口，不会再触发它的启动期检测。
+      if (task.launchGame !== false) {
+        actions.launchPackage(config.game.packageName);
+        sleep(config.runtime.foregroundSettleMs || 3000);
+      }
     }
 
     result.steps = task.run(context) || [];

@@ -139,6 +139,25 @@ AutoJs6 打包界面会用自己的 schema 回写 `project.json`。以下字段�
 - 安装为 `com.dsom.macro.rxfs`，启动后**自动执行登录任务，9 步全绿，耗时 69 秒**
 - 该云机会自动授予无障碍服务；普通设备需要手动在系统设置里为新 APK 开启
 
+## 独立 APK 下的截图授权时序
+
+打包成 APK 后，captureAfterLaunch 的时序会踩到 Android 的后台限制：
+
+1. 点图标启动，APK 在前台
+2. 脚本立刻拉起目标应用，**目标应用抢到前台，APK 退到后台**
+3. 等过目标应用的启动期检测
+4. 申请截图权限 —— 但此时自己在后台，Android 不允许后台应用拉起权限窗口
+
+现象是 `Start activity to request screen capture timeout (5000ms)`，
+而弹窗往往在超时之后才显示出来，看着像卡死。
+
+运行时已处理：申请前先把自身切回前台（`context.getPackageName()` + `app.launchPackage`），
+等 `runtime.foregroundSettleMs` 后再申请，失败则重试 `runtime.capturePermissionAttempts` 次；
+授权完成后再把目标应用拉回前台（进程还在，不会重新触发启动检测）。
+
+本机实测 `foregroundSettleMs` 需要 6 秒，3 秒不够——拉起权限窗口的耗时正好卡在
+AutoJs6 内部 5 秒硬超时的边缘。修正后点图标启动，9 步全绿，耗时 66 秒。
+
 ## 尚未解决
 
 **截图授权每次仍需确认一次。** 打包后的 APK 同样要申请 MediaProjection，
