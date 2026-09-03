@@ -7,6 +7,7 @@
 | `build-autojs-bundles.js` | 递归打包入口与 CommonJS 依赖 | `npm run build` |
 | `check-autojs-project.js` | 检查 JS 语法、配置和任务登记 | `npm run check` |
 | `build-autojs-project.js` | 组装 AutoJs6 项目目录，供打包成独立 APK | `npm run project` |
+| `package-apk.ps1` | 生成项目、推送、等待手机打包并自动安装 | 见 `.docs/PACKAGING.md` |
 | `create-game-project.js` | 创建下一款游戏的干净项目 | 见下方示例 |
 | `commit-push.ps1` | 提交全部改动并推送当前分支 | `.\.docs\script\commit-push.ps1 "feat: xxx"` |
 

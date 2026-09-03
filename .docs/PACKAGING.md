@@ -20,6 +20,42 @@ build/<名称>_v<版本>.apk  生成的独立 APK
 打包动作只能在手机上的 AutoJs6 里完成。VSCode 插件提供了新建、保存、运行项目，
 但**没有打包命令**，无法从 PC 触发。
 
+APK 落在**项目目录下的 `build/`**，命名为 `<应用名>_v<版本名>.apk`，
+例如 `/sdcard/rxfs-project/build/RXFS_v1.0.0.apk`。该路径在打包界面可改。
+
+APK 本就在设备上，安装时直接用设备路径，不必回传 PC（40MB 走公网要几十秒）：
+
+```powershell
+adb -s <设备地址> shell pm install -r /sdcard/rxfs-project/build/RXFS_v1.0.0.apk
+```
+
+## 一条命令走完（推荐）
+
+```powershell
+.\.docs\script\package-apk.ps1 -Device <设备地址> -Install -Launch
+```
+
+脚本负责打包前后两段：生成项目 -> 推送到手机 -> 打印手机上的操作步骤 ->
+等待 APK 产出 -> 自动安装 -> 可选启动。中间的打包动作仍需在手机上点四下。
+
+| 参数 | 说明 |
+|---|---|
+| `-Device` | 必填。设备地址；云机地址禁止写进提交文件，故不设默认值 |
+| `-Install` | 打包完成后自动安装 |
+| `-Launch` | 安装后启动，隐含 `-Install` |
+| `-SkipGenerate` | 跳过 `npm run project`，用现有 `dist/project` |
+| `-WaitMinutes` | 等待手机端打包的上限，默认 10 |
+
+脚本会先清空设备上的项目目录（含 `build/`）。原因是版本号不变时新旧 APK 同名，
+靠文件名无法判断是否重新打过；清空后出现的任何 APK 必然是本次产物。
+
+**两个实测踩到的坑，脚本已规避：**
+
+- APK 刚出现时可能还在写。实测写到约 19MB 就能被 `ls` 看到，此时安装会报
+  `Failed to parse APK file`。脚本会等文件大小连续两次不变再安装。
+- `pm install` 的失败信息走 stderr，而 PowerShell 不把原生命令的 stderr 收进变量，
+  只判断返回文本会把失败误判成成功。重定向要写在**设备侧 shell** 里（`pm install ... 2>&1`）。
+
 ## 生成项目目录
 
 ```powershell

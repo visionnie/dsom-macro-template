@@ -1,4 +1,4 @@
-﻿// =====================================================================
+// =====================================================================
 // 操作场景：为公司新游戏创建一份干净的 AutoJs6 自动化项目
 // 当前手动步骤：校验目标目录 -> 复制通用骨架 -> 写入项目与包名配置
 // 输入参数：--target、--id、--name、--package；--dry-run 可只做检查
@@ -30,6 +30,7 @@ const genericPaths = [
   ".docs/script/check-autojs-project.js",
   ".docs/script/create-game-project.js",
   ".docs/script/commit-push.ps1",
+  ".docs/script/package-apk.ps1",
   "src/README.md",
   "src/assets/README.md",
   "src/config/game-config-autojs.js",
