@@ -38,6 +38,7 @@ const genericPaths = [
   "src/core/actions-autojs.js",
   "src/core/case/case-geometry-autojs.js",
   "src/core/case/case-schema-autojs.js",
+  "src/core/case/case-runner-autojs.js",
   "src/core/logger-autojs.js",
   "src/core/ocr-autojs.js",
   "src/core/runtime-autojs.js",
