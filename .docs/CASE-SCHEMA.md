@@ -1,5 +1,18 @@
 # 用例结构 - CASE-SCHEMA.md
 
+> **状态：设计稿，未实现。写用例请看 `CASE-MVP.md`。**
+>
+> 本文档描述的 `steps` + `expect` / `action` / `verify` 三段式结构，只有校验器
+> （`case-schema-autojs.js`）和坐标换算（`case-geometry-autojs.js`），**没有执行器**，
+> 也没有任何代码引用这两个文件。
+>
+> 实际跑着的是另一套 `nodes` 节点图结构，由 `case-runner-autojs.js` 实现，
+> 契约写在 `CASE-MVP.md`。两者字段完全不同却共用 `schemaVersion: 1`，
+> 这是历史遗留问题——本文档的结构真要落地时，必须先把版本号分开。
+>
+> 保留本文档是因为其中三条设计决定（归一化坐标 + 基线分辨率、锚点优先坐标兜底、
+> `broken` 与 `failed` 分离）仍然是 MVP 要补的方向，见 `CASE-MVP.md` 的「已知缺口」。
+
 ## 定位
 
 用例（case）是一段可序列化、可回放的操作序列，是录制器、回放器和报告三方唯一的契约。任何一方改动字段都必须先改本文档并递增 `schemaVersion`。

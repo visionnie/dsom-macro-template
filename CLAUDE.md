@@ -7,8 +7,10 @@
 开发前阅读 `AGENTS.md`，按需查阅：
 
 - `.docs/PROJECT.md`：项目定位与复用方式
-- `.docs/RULES.md`：代码和任务边界
-- `.docs/CASE-SCHEMA.md`：可回放用例的数据结构契约
+- `.docs/RULES.md`：代码、用例、分支的边界
+- `.docs/CASE-MVP.md`：**已实现的 JSON 用例格式，写用例只看这份**
+- `.docs/CASE-SCHEMA.md`：早期设计稿，未实现，勿照着写用例
+- `.docs/RECORDER-RESEARCH.md`：录制器的设计来源与 MVP 边界
 - `.docs/PACKAGING.md`：打包成独立 APK 的流程与实测结论
 - `.docs/HANDOFF.md`：当前进度与下一步
 - `src/README.md`：AutoJs6 接入步骤
@@ -19,5 +21,7 @@
 npm run check
 npm run build
 ```
+
+在 `test` 分支开发；合并到 `main` 必须由项目所有者明确要求。
 
 会话结束更新 `.docs/HANDOFF.md` 的 next action。

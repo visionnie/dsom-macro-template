@@ -26,6 +26,16 @@
 - 坐标操作必须检查设备分辨率或使用明确的适配策略。
 - 新任务复制 `_task-template-autojs.js`，完成后登记到任务表。
 
+## 用例规则
+
+- 写用例以 `CASE-MVP.md` 为准；`CASE-SCHEMA.md` 是未实现的设计稿，字段喂给回放器会报错。
+- 节点类型只有 `noop` / `tap` / `tapImage`，不要自行扩充。
+- 锚点图由人工框选，禁止自动截取——把动态背景框进模板就再也匹配不上。
+- 用例 JSON 与素材都是外部数据，必须与 `main.js` 同级；`npm run check` 不校验它们，
+  改完一律推到设备实跑一次。
+- `launchGame` / `requiresCapture` / `captureAfterLaunch` 以任务模块的导出为准，
+  JSON 里的同名字段不生效。
+
 ## 仓库规则
 
 - 禁止硬编码密钥、账号、设备口令和云机地址。
@@ -33,6 +43,14 @@
 - AutoJs6 产品代码放在 `src/`；维护脚本放在 `.docs/script/`。
 - 修改通用入口或模块后执行 `npm run check` 和 `npm run build`。
 - 生成的 `dist/` 不提交 Git。
+
+## 分支规则
+
+- `test` 是开发线，日常提交和实机验证都在这里。
+- `main` 是稳定线，只接受 `test` 上验证通过的内容。
+- **合并方向永远是 `test` → `main`，且必须由项目所有者明确要求才能合。**
+  AI 不得自行发起合并，也不得直接向 `main` 提交。
+- 合并用 `--no-ff`；版本标签打在 `main` 上，与 `package.json` 的 `version` 对齐。
 
 ## 文档规则
 

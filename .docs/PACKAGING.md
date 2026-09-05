@@ -66,23 +66,28 @@ adb -s <设备地址> shell pm install -r /sdcard/rxfs-project/build/RXFS_v1.0.0
 npm run project
 ```
 
-产出 `dist/project/`，三部分：
+产出 `dist/project/`：
 
 | 内容 | 说明 |
 |---|---|
 | `main.js` | 打包后的单文件，即 `dist/main-autojs.js` |
 | `assets/` | 找图素材，必须与 `main.js` 同级 |
+| `cases/` | JSON 用例，同样必须与 `main.js` 同级；`src/cases/` 不存在时跳过 |
 | `project.json` | AutoJs6 项目配置 |
 
 可选参数：`--package`、`--version-name`、`--version-code`、`--libs`、`--abis`、`--run-on-boot`。
 
-## 素材路径必须是相对路径
+## 素材与用例路径必须是相对路径
 
 配置里 `assetsRoot: "./assets"`，由运行时用 `files.path()` 解析为相对当前脚本的位置。
+用例同理，`case-runner` 用 `files.path("cases/xxx.json")` 加载。
 
-这样同一份配置在两种形态下都成立：开发时脚本与 `assets/` 一起推到设备同一目录，
-打包后两者一起进包。**如果写成 `/sdcard/...` 绝对路径，打包后必然找不到素材。**
+这样同一份配置在两种形态下都成立：开发时脚本与 `assets/`、`cases/` 一起推到设备同一目录，
+打包后三者一起进包。**如果写成 `/sdcard/...` 绝对路径，打包后必然找不到。**
 生成器会拒绝非相对路径的配置。
+
+外部数据文件目前是两类——`assets/` 和 `cases/`。以后再加第三类，
+`build-autojs-project.js` 和 `run-task.ps1` 两处都要同步，否则开发时能跑、打包后必崩。
 
 ## project.json 的真实字段
 
