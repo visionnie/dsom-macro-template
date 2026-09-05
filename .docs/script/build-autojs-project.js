@@ -75,6 +75,7 @@ function copyDirectory(fromDir, toDir, filter) {
 
 const bundlePath = path.join(projectRoot, "dist/main-autojs.js");
 const assetsDir = path.join(projectRoot, "src/assets");
+const casesDir = path.join(projectRoot, "src/cases");
 const outputDir = path.resolve(
   projectRoot,
   readArgument("--output", "dist/project")
@@ -129,6 +130,16 @@ const assetCount = copyDirectory(
   (name) => name.toLowerCase().endsWith(".png")
 );
 
+// 用例 JSON 同样要与 main.js 同级：case-runner 用 files.path("cases/xxx.json") 加载。
+let caseCount = 0;
+if (fs.existsSync(casesDir)) {
+  caseCount = copyDirectory(
+    casesDir,
+    path.join(outputDir, "cases"),
+    (name) => name.toLowerCase().endsWith(".json")
+  );
+}
+
 const projectConfig = {
   name: config.project.name,
   packageName: packageName,
@@ -163,6 +174,7 @@ const relativeOutput = path.relative(projectRoot, outputDir);
 console.log("已生成 AutoJs6 项目: " + relativeOutput);
 console.log("  入口: main.js");
 console.log("  素材: assets/（" + assetCount + " 个 png）");
+console.log("  用例: cases/（" + caseCount + " 个 json）");
 console.log("  包名: " + packageName + "  版本: " + versionName + " (" + versionCode + ")");
 console.log("  支持库: " + libs.join(", ") + "   ABI: " + abis.join(", "));
 console.log("  开机自启: " + (projectConfig.launchConfig.runOnBoot ? "是" : "否"));
