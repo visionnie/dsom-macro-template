@@ -97,6 +97,16 @@ function create(options) {
     });
   }
 
+  // 保存到调用方指定的路径。录制器需要按步号命名并落在会话目录里，
+  // saveStage 的"当前任务目录 + 时间戳"命名对它不适用。
+  function saveTo(path) {
+    return withCapture(function (image) {
+      files.ensureDir(path.substring(0, path.lastIndexOf("/") + 1));
+      images.save(image, path, "png", 100);
+      return path;
+    });
+  }
+
   function getRgb(image, x, y) {
     var pixel = images.pixel(image, x, y);
     return {
@@ -188,6 +198,7 @@ function create(options) {
     },
     withCapture: withCapture,
     saveStage: saveStage,
+    saveTo: saveTo,
     getRgb: getRgb,
     waitFor: waitFor,
     findTemplate: findTemplate

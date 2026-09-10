@@ -42,6 +42,7 @@ JSON 用例引擎（`case-runner`）可用，支持跨分辨率换算与有界�
 | `.docs/CASE-MVP.md` | **写或改 JSON 用例前必读**，这是唯一实现了的用例格式 |
 | `.docs/CASE-SCHEMA.md` | 设计稿，**未实现**，别照着写用例 |
 | `.docs/RESIDENT.md` | 常驻调度，无人值守的入口 |
+| `.docs/RECORDER.md` | 录制器的实现与实测踩到的悬浮窗坑 |
 | `.docs/PACKAGING.md` | 打包成 APK，含实测踩过的坑 |
 | `.docs/RECORDER-RESEARCH.md` | 录制器的设计来源与 MVP 边界 |
 | `.docs/RULES.md` | 代码、用例、分支的硬边界 |

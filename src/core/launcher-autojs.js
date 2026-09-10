@@ -267,23 +267,124 @@ function formatTime(isoText) {
   );
 }
 
-// ---- 录制（下一步）----
+// ---- 录制 ----
+// 录制只需要截图和日志，不需要运行时的启动/权限编排，
+// 所以这里造一个最小上下文，而不是走 runtime.run。
+function createRecordingContext(config, outputDir) {
+  var loggerModule = require("./logger-autojs.js");
+  var screenModule = require("./screen-autojs.js");
+  var logger = loggerModule.create({ outputDir: outputDir });
+  var screen = screenModule.create({
+    logger: logger,
+    outputDir: outputDir,
+    capture: config.capture
+  });
+  return { config: config, logger: logger, screen: screen };
+}
+
 function renderRecorder(config, state) {
   ui.layout(
     xml(
       ['<vertical bg="#fafafa" h="*">']
         .concat(pageHeader("录制用例"))
         .concat([
-          '  <vertical padding="16" layout_weight="1">',
-          '    <text text="尚未实现" textSize="18sp" textColor="#c62828"/>',
-          '    <text textSize="13sp" textColor="#555555" marginTop="12" text="设计已经定死：只做三种动作（空节点 / 点击 / 点击图片），锚点由人在截图上手工框选，不自动截取。"/>',
-          '    <text textSize="13sp" textColor="#555555" marginTop="12" text="当前用例仍需在 PC 上手写 JSON，格式见 .docs/CASE-MVP.md，写完用 npm run check 静态校验。"/>',
-          '    <text textSize="13sp" textColor="#555555" marginTop="12" text="做法与边界见 .docs/RECORDER-RESEARCH.md。"/>',
-          "  </vertical>",
+          '  <ScrollView layout_weight="1">',
+          '    <vertical padding="16">',
+          '      <text text="边操作游戏边录，每点一下记一个节点。" textSize="15sp" textColor="#212121"/>',
+          '      <text textSize="13sp" textColor="#555555" marginTop="10" text="开始后会拉起游戏，屏幕上出现一个黑色小条显示已记录步数。你正常操作游戏即可，每次抬手记一个节点，并保存该步的截图。"/>',
+          '      <text textSize="13sp" textColor="#c62828" marginTop="10" text="小条所在的左上角区域不会被记录，那里是「停止」和「撤销」。"/>',
+          '      <text textSize="13sp" textColor="#555555" marginTop="10" text="录完在复核页把关键步骤升级成「点击图片」并框选锚点——死坐标换个分辨率就偏，锚点才稳。"/>',
+          '      <button id="startButton" text="开始录制" style="Widget.AppCompat.Button.Colored" h="52" marginTop="20"/>',
+          '      <text id="recorderHint" text="" textSize="12sp" textColor="#666666" marginTop="12"/>',
+          "    </vertical>",
+          "  </ScrollView>",
           "</vertical>"
         ])
     )
   );
+
+  ui.backButton.on("click", function () {
+    renderMenu(config, state);
+  });
+
+  ui.startButton.on("click", function () {
+    if (busy) {
+      toast("已有任务在运行");
+      return;
+    }
+    ui.recorderHint.setText("正在申请截图权限…");
+    ui.startButton.setEnabled(false);
+
+    threads.start(function () {
+      var recorder = require("./recorder-autojs.js");
+      var sessionDir = config.outputRoot + "/recordings";
+      var recordingContext = createRecordingContext(config, sessionDir);
+      try {
+        // UI 在前台，可以直接申请，不需要运行时那套切前台的绕法。
+        recordingContext.screen.requestPermission();
+      } catch (error) {
+        ui.run(function () {
+          ui.recorderHint.setText("截图权限没拿到，无法录制: " + error);
+          ui.startButton.setEnabled(true);
+        });
+        return;
+      }
+
+      // 拉起游戏，让人直接开始操作；悬浮层是系统窗口，会盖在游戏之上。
+      if (config.game && config.game.packageName) {
+        app.launchPackage(config.game.packageName);
+        sleep(config.runtime && config.runtime.launchSettleMs ? 3000 : 3000);
+      }
+
+      ui.run(function () {
+        recorder.start(recordingContext, config, function (session, savedPath) {
+          // 录完把自己拉回前台，否则复核页显示在游戏后面看不见。
+          app.launchPackage(context.getPackageName());
+          sleep(600);
+          ui.run(function () {
+            renderRecordingReview(config, state, session, savedPath);
+          });
+        });
+      });
+    });
+  });
+}
+
+// ---- 录制结果复核 ----
+function renderRecordingReview(config, state, session, savedPath) {
+  var rows = [];
+  for (var i = 0; i < session.nodes.length; i++) {
+    var node = session.nodes[i];
+    rows.push({
+      title: node.name + "　" + node.type,
+      subtitle:
+        "rx " + node.rx + "　ry " + node.ry +
+        (node.postWaitMs ? "　停顿 " + node.postWaitMs + "ms" : "")
+    });
+  }
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#fafafa" h="*">']
+        .concat(pageHeader("录制结果"))
+        .concat([
+          '  <text id="reviewSummary" text="" textSize="13sp" textColor="#555555" padding="16 12"/>',
+          '  <list id="reviewList" layout_weight="1">',
+          '    <vertical padding="16 12" bg="#ffffff" w="*">',
+          '      <text text="{{title}}" textSize="15sp" textColor="#212121"/>',
+          '      <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
+          "    </vertical>",
+          "  </list>",
+          '  <text textSize="12sp" textColor="#666666" padding="16 10" text="会话已存盘。把它变成可回放用例还需要框锚点，当前版本请把 session.json 拉回 PC 处理。"/>',
+          "</vertical>"
+        ])
+    )
+  );
+
+  ui.reviewSummary.setText(
+    "共 " + session.nodes.length + " 步　已保存到\n" + savedPath
+  );
+  ui.reviewList.setDataSource(rows);
   ui.backButton.on("click", function () {
     renderMenu(config, state);
   });
