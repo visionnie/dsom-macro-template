@@ -31,8 +31,9 @@
 - 写用例以 `CASE-MVP.md` 为准；`CASE-SCHEMA.md` 是未实现的设计稿，字段喂给回放器会报错。
 - 节点类型只有 `noop` / `tap` / `tapImage`，不要自行扩充。
 - 锚点图由人工框选，禁止自动截取——把动态背景框进模板就再也匹配不上。
-- 用例 JSON 与素材都是外部数据，必须与 `main.js` 同级；`npm run check` 不校验它们，
-  改完一律推到设备实跑一次。
+- 用例 JSON 与素材都是外部数据，必须与 `main.js` 同级。
+- 节点循环用 `maxVisits` + `onExhausted`，两者必须成对；只给上限不给出口不算有界。
+- `npm run check` 会做静态校验，但查不出阈值、锚点、时序问题，改完仍要实机跑一次。
 - `launchGame` / `requiresCapture` / `captureAfterLaunch` 以任务模块的导出为准，
   JSON 里的同名字段不生效。
 

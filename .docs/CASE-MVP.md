@@ -10,9 +10,9 @@
 | 状态 | **已实现，正在跑真实用例** | **只有设计稿和校验器，没有执行器** |
 | 谁在用 | `src/tasks/case-*-autojs.js` → 真实 JSON | 没有任何代码 require 它 |
 
-`case-schema-autojs.js` 只被 `case-geometry-autojs.js` 引用，而 `case-geometry-autojs.js`
-不被任何人引用——这两个文件目前是**死代码**，是先于 MVP 做的设计，保留是因为
-里面的归一化换算和锚点分类以后还用得上。
+`case-geometry-autojs.js`（归一化坐标换算）**已经在实际调用链上**——
+`case-runner` 用它做跨分辨率换算。`case-schema-autojs.js` 目前只被 geometry 引用，
+用于取默认的 `scaleStrategy`；它那套 `steps` 校验器仍然没有执行器。
 
 **写新用例、改回放器，一律以本文档为准。** 看到 `CASE-SCHEMA.md` 里的
 `steps` / `expect` / `verify` / `anchor` / `swipe`，那些字段喂给 `case-runner` 会直接报错。
@@ -40,6 +40,7 @@
 | `maxNodeVisits` | 否 | 节点访问次数上限，默认 500，超出抛错 |
 | `orientationWaitMs` | 否 | 等待屏幕转到 baseline 方向的上限，默认 20000 |
 | `orientationPollMs` | 否 | 上述等待的轮询间隔，默认 1000 |
+| `requires` | 否 | 前置任务 id 数组。本用例假定它们已经跑过 |
 
 **陷阱**：真实用例 `boss-feast-layer3.json` 里还写着 `launchGame` / `requiresCapture` /
 `captureAfterLaunch`。**`case-runner` 完全不读这三个字段。** 它们的生效位置是任务模块
@@ -55,6 +56,21 @@
 | `type` | 是 | `noop` / `tap` / `tapImage`，其余值抛错 |
 | `onSuccess` | 否 | 默认 `@next` |
 | `onFail` | 否 | 默认 `@abort` |
+| `maxVisits` | 否 | 本节点最多执行几次，用于有界循环 |
+| `onExhausted` | 配了 `maxVisits` 就必填 | 次数用尽后转向哪里 |
+
+**`maxVisits` 与 `onExhausted` 必须成对出现**，校验器强制。只给上限不给出口，
+等于把死循环换成了硬报错，而循环的意义正是"试够了就往下走"。
+
+用它表达「最多点三次关闭按钮，然后不管了继续」：
+
+```json
+{ "id": "close-popup", "name": "关弹窗", "type": "tapImage", "asset": "ui/close.png",
+  "waitMs": 3000, "maxVisits": 3, "onSuccess": "close-popup", "onExhausted": "@next",
+  "onFail": "@next" }
+```
+
+`onSuccess` 指回自己形成环，`maxVisits` 给环划界，`onExhausted` 给出口。
 
 ### `noop`
 
@@ -110,21 +126,23 @@
 **没有 `skipped`，没有 `optional`，没有 `broken`。** `CASE-SCHEMA.md` 里
 把环境问题（`broken`）和业务失败（`failed`）分开统计的设计，在 MVP 里还不存在。
 
-## baseline 的真实作用：只管方向，不做缩放
+## baseline 管两件事：方向断言 + 分辨率换算
 
-`baseline` 唯一的用途是确认「设备横竖屏方向与录制时一致」。
+`baseline` 首先用于确认「设备横竖屏方向与录制时一致」。方向本身不做换算——
+横竖屏对调意味着界面布局完全不同，不是缩放能解决的。
 
 **这个检查是有上限的等待，不是即时判断。** 屏幕方向跟随前台应用而变，而游戏被拉起后
 要过若干秒才真正转成横屏。2026-09-10 实测：拿到截图授权、把游戏拉回前台后仅 6 秒就跑用例，
 设备仍报 720x1280（竖屏），用例当场失败——失败的是时序，不是用例。
-现在改为轮询等待 `orientationWaitMs`（默认 20 秒），超时才抛错。
+现在改为轮询等待 `orientationWaitMs`（默认 20 秒），超时才抛错（判定为 `broken`）。
 
-**归一化坐标是按当前设备算的**：`tap` 用 `node.rx * device.width`，`region` 同理，
-过程里根本不参考 `baseline.width / height`。
+方向一致之后，坐标按 `case-geometry` 的 viewport 从 baseline 换算到当前设备：
+`fit`（默认，等比缩放居中留边）或 `stretch`（横纵独立拉伸），
+由 `baseline.scaleStrategy` 指定。**baseline 与设备同尺寸时是恒等映射**，
+所以在录制设备上跑，行为与换算前一致。宽高比差异超过 5% 会记一条告警——
+那种情况下任何策略都不完全可信。
 
-所以 **MVP 目前不具备「一次录制、多端回放」能力**——只要分辨率或宽高比变了，
-死坐标 `tap` 就会偏。现在能跑通是因为始终在同一台 720x1280 云机上。
-`case-geometry-autojs.js` 里的 `createViewport` 才是为跨端换算准备的，但还没接进来。
+换算越界不会静默裁剪，而是直接抛错——盲点比报错更难查。
 
 ## 用例 JSON 必须与 main.js 同级
 
@@ -135,12 +153,20 @@
 
 写成绝对路径打包后必然找不到。
 
-## `npm run check` 不校验用例
+## `npm run check` 会校验用例
 
-检查脚本只看 JS 语法、配置和任务登记，**完全不碰 `src/cases/` 和 `src/assets/`**。
-用例 JSON 写错（字段拼错、节点 id 重复、region 越界）只有在设备上跑到那一步才会暴露。
+检查脚本对 `src/cases/*.json` 逐个做四件事：
 
-改完用例请直接推到设备跑一次，别指望 `npm run check` 拦住。
+1. **schema 校验**，复用设备侧同一份 `validateCase`，两边判定不会不一致
+2. **跳转目标存在性**——运行时刻意放行未知目标（允许向前跳到还没扫到的节点），
+   所以拼错一个 id 要跑到那一步才炸；这里静态查掉
+3. **素材文件存在性**——素材缺失在设备上是 `broken`，完全可以提前拦住
+4. **`requires` 指向已登记任务**——否则常驻调度器到点才发现前置补不上
+
+JSON 带 UTF-8 BOM 也能正常解析：Windows 上保存 JSON 常常带 BOM，
+肉眼看不出来，而 `JSON.parse` 会直接抛。加载方和校验器都做了容错。
+
+仍然要实机跑：静态校验查不出阈值不合适、锚点选错、时序不够这些问题。
 
 ## 加一条新用例
 
@@ -157,12 +183,24 @@
 第 3 步里 `require` 之外不要写业务逻辑。`files.path` 只在设备上存在，
 所以 `loadCase` 必须放在 `run()` 内部——放到模块顶层会让 `npm run check` 在 Node 下直接崩。
 
+## 执行结果里的三种状态
+
+`runCase` 返回的每一步是 `passed` / `failed` / `exhausted`（次数用尽），
+而整条用例在运行时层面取 `passed` / `failed` / `broken`。
+
+`broken` 是环境或前置条件不成立——截图权限没给、游戏起不来、素材缺失、
+屏幕方向不对、用例文件没推上去。它不是业务缺陷，必须与 `failed` 分开统计，
+否则通过率会失去意义。判定由 `src/core/errors-autojs.js` 的标记决定，不靠猜错误文本。
+
 ## 已知缺口
 
-按优先级：
+**录制器还没开始做。** 用例目前全靠手写 JSON。设计早已定死（三种动作类型、
+锚点由用户手工框选），见 `RECORDER-RESEARCH.md`，但一行代码没写。
+这是当前最大的一块。
 
-1. **跨分辨率回放**：接入 `case-geometry` 的 viewport 换算，让 `baseline` 真正生效
-2. **`broken` 与 `failed` 分离**：环境问题和业务失败混在一起，通过率会失去意义
-3. **有界循环**：目前只能靠节点跳转手工造环 + `maxNodeVisits` 兜底，没有 `repeat` 语义
-4. **静态校验**：把用例 JSON 纳入 `npm run check`，至少查跳转目标存在性
-5. **录制器**：目前用例是手写 JSON，录制器还没开始做，设计见 `RECORDER-RESEARCH.md`
+较小的：
+
+- **跨分辨率只做了坐标换算，没做素材换算。** 模板图是按录制分辨率截的，
+  换到别的分辨率后找图仍可能失配。一套素材配一个基线，差异过大时需要另录。
+- **`optional` 步骤**：没有"这一步失败了就跳过并记 skipped"的语义，
+  只能用 `onFail` 跳转手工表达。

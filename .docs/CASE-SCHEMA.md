@@ -2,16 +2,17 @@
 
 > **状态：设计稿，未实现。写用例请看 `CASE-MVP.md`。**
 >
-> 本文档描述的 `steps` + `expect` / `action` / `verify` 三段式结构，只有校验器
-> （`case-schema-autojs.js`）和坐标换算（`case-geometry-autojs.js`），**没有执行器**，
-> 也没有任何代码引用这两个文件。
+> 本文档描述的 `steps` + `expect` / `action` / `verify` 三段式结构只有校验器
+> （`case-schema-autojs.js`），**没有执行器**，没有任何用例是这个形状。
 >
 > 实际跑着的是另一套 `nodes` 节点图结构，由 `case-runner-autojs.js` 实现，
 > 契约写在 `CASE-MVP.md`。两者字段完全不同却共用 `schemaVersion: 1`，
 > 这是历史遗留问题——本文档的结构真要落地时，必须先把版本号分开。
 >
-> 保留本文档是因为其中三条设计决定（归一化坐标 + 基线分辨率、锚点优先坐标兜底、
-> `broken` 与 `failed` 分离）仍然是 MVP 要补的方向，见 `CASE-MVP.md` 的「已知缺口」。
+> 本文档的三条设计决定已有两条落地到 MVP：**归一化坐标 + 基线分辨率**
+> （`case-geometry` 已接入 `case-runner`，做跨分辨率换算）、**`broken` 与 `failed` 分离**
+> （见 `src/core/errors-autojs.js`）。剩下**锚点优先、坐标兜底**——MVP 的
+> `tapImage` 已经是锚点定位，但没有"纯坐标点击且无锚点时告警"这类结构约束。
 
 ## 定位
 
