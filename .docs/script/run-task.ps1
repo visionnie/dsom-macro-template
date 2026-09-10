@@ -122,6 +122,17 @@ if ($ColdStart -and $packageName) {
 # ---- 拉起 AutoJs6 并执行 ----
 Invoke-Adb @('shell', 'am force-stop org.autojs.autojs6') | Out-Null
 Start-Sleep -Seconds 2
+
+# 上一轮失败可能在屏幕上留下没人应答的截图授权弹窗。不清掉的话，下面的轮询会在
+# T+3s 就命中它，把陈旧弹窗当成本次的点掉并判定“已授权”，而本次真正的弹窗
+# （captureAfterLaunch 下要等 launchSettleMs 之后才出现）就再没人管，任务挂到超时。
+# 实测 BACK 和点“取消”都关不掉这种孤儿弹窗，HOME 可以。
+$staleFocus = Invoke-Adb @('shell', 'dumpsys window | grep mCurrentFocus | tail -1')
+if ($staleFocus -match 'MediaProjectionPermissionActivity') {
+    Invoke-Adb @('shell', 'input', 'keyevent', 'KEYCODE_HOME') | Out-Null
+    Start-Sleep -Seconds 2
+    Write-Host "已清掉上一轮残留的截图授权弹窗"
+}
 Invoke-Adb @('shell', 'monkey', '-p', 'org.autojs.autojs6', '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
 Start-Sleep -Seconds 4
 Invoke-Adb @(
