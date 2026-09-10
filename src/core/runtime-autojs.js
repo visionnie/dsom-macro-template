@@ -8,6 +8,7 @@ var screenModule = require("./screen-autojs.js");
 var actionsModule = require("./actions-autojs.js");
 var ocrModule = require("./ocr-autojs.js");
 var workflow = require("./workflow-autojs.js");
+var errors = require("./errors-autojs.js");
 
 function validateConfig(config) {
   if (!config.project || !config.project.id || !config.project.name) {
@@ -135,7 +136,7 @@ function run(config, task) {
         device.width !== config.screen.width ||
         device.height !== config.screen.height
       ) {
-        throw new Error(
+        throw errors.broken(
           "屏幕尺寸不匹配，期望 " +
             config.screen.width +
             "x" +
@@ -201,9 +202,13 @@ function run(config, task) {
     result.status = "passed";
     logger.info("任务完成: " + task.name);
   } catch (error) {
-    result.status = "failed";
+    // broken = 环境或前置条件不成立（权限、启动、素材、屏幕），failed = 用例真没通过。
+    // 两者必须分开统计，否则通过率会失去意义。
+    result.status = errors.statusOf(error);
     result.error = getErrorDetail(error);
-    logger.error("任务失败: " + result.error);
+    logger.error(
+      (result.status === "broken" ? "任务中断（环境问题）: " : "任务失败: ") + result.error
+    );
     if (screen.hasPermission()) {
       try {
         result.failureScreenshot = screen.saveStage("task-failed");

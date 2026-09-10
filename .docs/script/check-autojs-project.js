@@ -72,6 +72,90 @@ function checkTasks() {
   registry.get(config.defaultTask);
 }
 
+// 用例 JSON 此前完全不进检查：写错字段、节点 id 重复、跳转目标拼错、素材文件名写错，
+// 都要等推到设备上跑到那一步才暴露，一次往返好几分钟。这里在 PC 上一次性查掉。
+// case-runner 的顶层只有 require 和函数定义，不碰 files / device，可以在 Node 里直接用。
+function checkCases() {
+  const casesDir = path.join(projectRoot, "src/cases");
+  if (!fs.existsSync(casesDir)) {
+    return 0;
+  }
+  const runnerPath = path.join(projectRoot, "src/core/case/case-runner-autojs.js");
+  if (!fs.existsSync(runnerPath)) {
+    throw new Error("存在 src/cases/ 但缺少 case-runner，无法校验用例");
+  }
+  const runner = require(runnerPath);
+  const registry = require(path.join(projectRoot, "src/task-registry-autojs.js"));
+  const knownTaskIds = new Set(registry.listIds());
+
+  const caseFiles = fs
+    .readdirSync(casesDir)
+    .filter((name) => name.toLowerCase().endsWith(".json"));
+
+  for (const fileName of caseFiles) {
+    const casePath = path.join(casesDir, fileName);
+    const relative = path.relative(projectRoot, casePath);
+    let data;
+    try {
+      // Windows 编辑器常写入 UTF-8 BOM，肉眼看不出来但 JSON.parse 直接抛。
+      // 设备侧 case-runner 也做同样的容错。
+      data = JSON.parse(fs.readFileSync(casePath, "utf8").replace(/^﻿/, ""));
+    } catch (parseError) {
+      throw new Error("用例 JSON 解析失败: " + relative + "\n" + parseError.message);
+    }
+
+    try {
+      runner.validateCase(data);
+    } catch (validationError) {
+      throw new Error("用例校验失败: " + relative + "\n" + validationError.message);
+    }
+
+    // 以下三项运行时查不了或故意放过，只能静态查：
+    const nodeIds = new Set(data.nodes.map((node) => node.id));
+    const terminals = new Set(["@next", "@end", "@abort"]);
+
+    // 1. 跳转目标存在性。validateCase 刻意放行未知字符串（允许向前跳），
+    //    于是拼错一个 id 要跑到那一步才炸。
+    for (const node of data.nodes) {
+      for (const field of ["onSuccess", "onFail", "onExhausted"]) {
+        const target = node[field];
+        if (target == null || terminals.has(target)) continue;
+        if (!nodeIds.has(target)) {
+          throw new Error(
+            "用例跳转目标不存在: " + relative +
+              " 节点 [" + node.id + "] 的 " + field + " -> " + target
+          );
+        }
+      }
+    }
+    if (data.entry && !nodeIds.has(data.entry)) {
+      throw new Error("用例 entry 不存在: " + relative + " -> " + data.entry);
+    }
+
+    // 2. 素材文件存在性。素材缺失在设备上是 broken，但完全可以在这里拦住。
+    for (const node of data.nodes) {
+      if (node.type !== "tapImage" || !node.asset) continue;
+      const assetPath = path.join(projectRoot, "src/assets", node.asset);
+      if (!fs.existsSync(assetPath)) {
+        throw new Error(
+          "用例引用的素材不存在: " + relative +
+            " 节点 [" + node.id + "] -> src/assets/" + node.asset
+        );
+      }
+    }
+
+    // 3. 前置依赖必须是已登记的任务，否则常驻调度器到点才发现补不上。
+    for (const required of data.requires || []) {
+      if (!knownTaskIds.has(required)) {
+        throw new Error(
+          "用例 requires 指向未登记的任务: " + relative + " -> " + required
+        );
+      }
+    }
+  }
+  return caseFiles.length;
+}
+
 const sourceFiles = collectJavaScriptFiles(path.join(projectRoot, "src"));
 const scriptFiles = collectJavaScriptFiles(path.join(projectRoot, ".docs/script"));
 for (const filePath of sourceFiles.concat(scriptFiles)) {
@@ -79,8 +163,12 @@ for (const filePath of sourceFiles.concat(scriptFiles)) {
 }
 checkConfig();
 checkTasks();
+const caseCount = checkCases();
 
-console.log("检查通过: " + sourceFiles.length + " 个源码文件");
+console.log(
+  "检查通过: " + sourceFiles.length + " 个源码文件" +
+    (caseCount > 0 ? "，" + caseCount + " 个用例" : "")
+);
 console.log(
   "已登记任务: " +
     require(path.join(projectRoot, "src/task-registry-autojs.js")).listIds().join(", ")

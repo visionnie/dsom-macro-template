@@ -5,7 +5,8 @@
 
 var tasks = [
   require("./tasks/environment-check-autojs.js"),
-  require("./tasks/launch-game-check-autojs.js")
+  require("./tasks/launch-game-check-autojs.js"),
+  require("./tasks/resident-runner-autojs.js")
 ];
 
 function get(taskId) {

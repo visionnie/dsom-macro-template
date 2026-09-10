@@ -3,6 +3,8 @@
 // 设计约束：所有坐标动作先做边界检查，避免配置错误导致越界盲点
 // =====================================================================
 
+var errors = require("./errors-autojs.js");
+
 function create(options) {
   var logger = options.logger;
   var runtimeConfig = options.runtime || {};
@@ -79,11 +81,11 @@ function create(options) {
   // 这类应用在启动时检测录屏，此时还没有截图权限，也就无法用画面判断前台。
   function launchPackage(packageName) {
     if (!packageName) {
-      throw new Error("尚未配置游戏包名");
+      throw errors.broken("尚未配置游戏包名");
     }
     logger.info("启动游戏: " + packageName);
     if (!app.launchPackage(packageName)) {
-      throw new Error("游戏启动失败: " + packageName);
+      throw errors.broken("游戏启动失败: " + packageName);
     }
   }
 
@@ -92,7 +94,7 @@ function create(options) {
   // 设备和正常设备上都能跑。
   function launchPackageAndWait(packageName, timeoutMs, options) {
     if (!packageName) {
-      throw new Error("尚未配置游戏包名");
+      throw errors.broken("尚未配置游戏包名");
     }
 
     var launchOptions = options || {};
@@ -102,7 +104,7 @@ function create(options) {
     if (packageBeforeLaunch !== packageName) {
       logger.info("启动游戏: " + packageName);
       if (!app.launchPackage(packageName)) {
-        throw new Error("游戏启动失败: " + packageName);
+        throw errors.broken("游戏启动失败: " + packageName);
       }
     }
 

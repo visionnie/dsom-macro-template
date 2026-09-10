@@ -3,6 +3,8 @@
 // 设计约束：本模块负责图片生命周期，调用方不持有未回收的 Image 对象
 // =====================================================================
 
+var errors = require("./errors-autojs.js");
+
 function sanitizeName(name) {
   return String(name || "screen").replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
@@ -34,7 +36,8 @@ function create(options) {
     }
 
     if (!granted) {
-      throw new Error("截图权限未授予");
+      // 环境问题：人没点授权，或系统没弹出来。不是用例的错。
+      throw errors.broken("截图权限未授予");
     }
     permissionGranted = true;
   }
@@ -50,7 +53,7 @@ function create(options) {
     var imageWidth = image.getWidth();
     var imageHeight = image.getHeight();
     if (imageWidth !== device.width || imageHeight !== device.height) {
-      throw new Error(
+      throw errors.broken(
         "截图尺寸与点击坐标空间不一致: 截图 " +
           imageWidth +
           "x" +
@@ -67,7 +70,7 @@ function create(options) {
 
   function ensurePermission() {
     if (!permissionGranted) {
-      throw new Error("尚未申请截图权限");
+      throw errors.broken("尚未申请截图权限");
     }
   }
 
@@ -149,7 +152,8 @@ function create(options) {
     ensurePermission();
     var template = images.read(templatePath);
     if (!template) {
-      throw new Error("模板图片读取失败: " + templatePath);
+      // 素材缺失属于环境问题：多半是没推 assets/ 或打包漏了，不是用例写错。
+      throw errors.broken("模板图片读取失败: " + templatePath);
     }
 
     try {

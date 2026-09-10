@@ -13,6 +13,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Device,
 
+    # 要跑的任务 ID。不给则用配置里的 defaultTask。
+    # 实现方式是往设备上写一个与 main.js 同级的 task.txt，由入口优先读取；
+    # 这样换任务不用改 defaultTask 再改回来，也不会把临时选择留在提交里。
+    [string]$Task,
+
     # 跑之前先强杀游戏，用于测试冷启动路径。
     [switch]$ColdStart,
 
@@ -62,20 +67,35 @@ function Get-ConfigValue {
     return $null
 }
 
-$taskId = Get-ConfigValue 'defaultTask'
+$defaultTaskId = Get-ConfigValue 'defaultTask'
 $outputRoot = Get-ConfigValue 'outputRoot'
 $packageName = Get-ConfigValue 'packageName'
 $projectId = Get-ConfigValue 'id'
 
-if (-not $taskId) { throw "未能从配置读出 defaultTask" }
+if (-not $defaultTaskId) { throw "未能从配置读出 defaultTask" }
 if (-not $projectId) { throw "未能从配置读出 project.id" }
+
+if ($Task) {
+    $taskId = $Task
+    # 任务必须已登记，否则要等推到设备上跑起来才发现拼错了。
+    $registered = (& node -e "process.stdout.write(require('$($projectRoot -replace '\\','/')/src/task-registry-autojs.js').listIds().join(','))")
+    if ($LASTEXITCODE -ne 0) { throw "无法读取任务登记表" }
+    if (($registered -split ',') -notcontains $taskId) {
+        throw "未登记的任务: $taskId（已登记: $registered）"
+    }
+}
+else {
+    $taskId = $defaultTaskId
+}
 
 # 配置里的 assetsRoot 是 ./assets，相对当前脚本解析。
 # 因此设备上脚本与素材必须放在同一目录，打包成 APK 后两者同样同级，形态一致。
 $deviceDir = "/sdcard/dsom-macro-$projectId"
 $deviceScript = "$deviceDir/main-autojs.js"
 Write-Host "任务: $taskId   设备: $Device" -ForegroundColor Cyan
-Write-Host "（要换任务，改 src/config/game-config-autojs.js 的 defaultTask）"
+if (-not $Task) {
+    Write-Host "（换任务用 -Task <任务ID>，不必改 defaultTask）"
+}
 
 # ---- 连接 ----
 & adb connect $Device | Out-Null
@@ -96,6 +116,16 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $bundle)) { throw "找不到构建产物: $bundle" }
 Invoke-Adb @('shell', "mkdir -p $deviceDir") | Out-Null
 Invoke-Adb @('push', $bundle, $deviceScript) | Out-Null
+
+# 任务选择通过 task.txt 传给设备侧入口。每次都显式写或删，
+# 否则上一轮 -Task 留下的文件会悄悄劫持这一轮的 defaultTask。
+if ($Task) {
+    Invoke-Adb @('shell', "echo '$taskId' > $deviceDir/task.txt") | Out-Null
+    Write-Host "已指定任务: $taskId"
+}
+else {
+    Invoke-Adb @('shell', "rm -f $deviceDir/task.txt") | Out-Null
+}
 
 if ($PushAssets) {
     # 素材与用例都是外部数据文件，改动后都需要重新推。
