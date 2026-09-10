@@ -38,6 +38,8 @@
 | `baseline` | 否 | `{ width, height }`，**只用于方向断言**，见下方陷阱 |
 | `entry` | 否 | 起始节点 id，默认从 `nodes[0]` 开始 |
 | `maxNodeVisits` | 否 | 节点访问次数上限，默认 500，超出抛错 |
+| `orientationWaitMs` | 否 | 等待屏幕转到 baseline 方向的上限，默认 20000 |
+| `orientationPollMs` | 否 | 上述等待的轮询间隔，默认 1000 |
 
 **陷阱**：真实用例 `boss-feast-layer3.json` 里还写着 `launchGame` / `requiresCapture` /
 `captureAfterLaunch`。**`case-runner` 完全不读这三个字段。** 它们的生效位置是任务模块
@@ -110,7 +112,12 @@
 
 ## baseline 的真实作用：只管方向，不做缩放
 
-`baseline` 唯一的用途是断言「设备横竖屏方向与录制时一致」，不一致就抛错。
+`baseline` 唯一的用途是确认「设备横竖屏方向与录制时一致」。
+
+**这个检查是有上限的等待，不是即时判断。** 屏幕方向跟随前台应用而变，而游戏被拉起后
+要过若干秒才真正转成横屏。2026-09-10 实测：拿到截图授权、把游戏拉回前台后仅 6 秒就跑用例，
+设备仍报 720x1280（竖屏），用例当场失败——失败的是时序，不是用例。
+现在改为轮询等待 `orientationWaitMs`（默认 20 秒），超时才抛错。
 
 **归一化坐标是按当前设备算的**：`tap` 用 `node.rx * device.width`，`region` 同理，
 过程里根本不参考 `baseline.width / height`。

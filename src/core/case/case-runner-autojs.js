@@ -14,6 +14,8 @@ var DEFAULT_TAP_IMAGE_WAIT_MS = 15000;
 var DEFAULT_TAP_IMAGE_POLL_MS = 1500;
 var DEFAULT_TAP_IMAGE_THRESHOLD = 0.85;
 var DEFAULT_TAP_IMAGE_PRE_TAP_MS = 400;
+var DEFAULT_ORIENTATION_WAIT_MS = 20000;
+var DEFAULT_ORIENTATION_POLL_MS = 1000;
 
 var VALID_TYPES = { noop: true, tap: true, tapImage: true };
 var TERMINAL_TARGETS = { "@next": true, "@end": true, "@abort": true };
@@ -130,23 +132,14 @@ function runCase(context, caseData) {
   for (var i = 0; i < nodes.length; i++) idToIndex[nodes[i].id] = i;
 
   // baseline 方向必须与设备方向一致：都竖屏或都横屏，MVP 不做换算。
-  // 不一致时立即抛错，避免归一化坐标 * device.width 得到荒唐位置。
+  // 不一致会让归一化坐标 * device.width 得到荒唐位置，所以必须拦住。
+  //
+  // 但这里不能一锤子判断：屏幕方向跟随前台应用而变，而游戏被拉起后要过若干秒
+  // 才真正转成横屏。实测拿到截图授权、把游戏拉回前台后仅 6 秒就跑用例，
+  // 此时设备仍报竖屏，用例直接失败——失败的是时序，不是用例本身。
+  // 因此改为有上限的轮询等待，超时才抛错。
   if (caseData.baseline) {
-    var deviceIsLandscape = device.width > device.height;
-    var baselineIsLandscape = caseData.baseline.width > caseData.baseline.height;
-    if (deviceIsLandscape !== baselineIsLandscape) {
-      throw new Error(
-        "屏幕方向与 baseline 不一致：baseline " +
-          caseData.baseline.width +
-          "x" +
-          caseData.baseline.height +
-          "，设备 " +
-          device.width +
-          "x" +
-          device.height +
-          "。MVP 不做方向换算，请先把画面转到匹配方向"
-      );
-    }
+    waitForOrientation(context, caseData);
   }
 
   var currentIndex = 0;
@@ -213,6 +206,60 @@ function runCase(context, caseData) {
     }
     currentIndex = idToIndex[target];
   }
+}
+
+// device.width / device.height 是实时的：它们随前台应用的屏幕方向变化。
+// 依据是 screen-autojs.js 的硬断言——截图尺寸与 device 尺寸不一致就抛错，
+// 而横屏游戏里的用例能连续跑通，说明两者是一起变的。所以轮询它们有效。
+function waitForOrientation(context, caseData) {
+  var baseline = caseData.baseline;
+  var baselineIsLandscape = baseline.width > baseline.height;
+  var waitMs =
+    caseData.orientationWaitMs != null
+      ? caseData.orientationWaitMs
+      : DEFAULT_ORIENTATION_WAIT_MS;
+  var pollMs =
+    caseData.orientationPollMs != null
+      ? caseData.orientationPollMs
+      : DEFAULT_ORIENTATION_POLL_MS;
+
+  var describe = function () {
+    return device.width + "x" + device.height;
+  };
+  var matched = function () {
+    return (device.width > device.height) === baselineIsLandscape;
+  };
+
+  if (matched()) return;
+
+  context.logger.info(
+    "等待屏幕转到 baseline 方向（" +
+      (baselineIsLandscape ? "横屏" : "竖屏") +
+      "），当前 " +
+      describe() +
+      "，上限 " +
+      waitMs +
+      " 毫秒"
+  );
+
+  var deadline = Date.now() + waitMs;
+  while (!matched()) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "等待 " +
+          waitMs +
+          " 毫秒后屏幕方向仍与 baseline 不一致：baseline " +
+          baseline.width +
+          "x" +
+          baseline.height +
+          "，设备 " +
+          describe() +
+          "。MVP 不做方向换算，请确认目标应用已进入并完成旋转"
+      );
+    }
+    sleep(pollMs);
+  }
+  context.logger.info("屏幕方向已匹配 baseline: " + describe());
 }
 
 function executeNode(context, node) {
