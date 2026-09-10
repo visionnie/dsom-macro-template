@@ -26,6 +26,11 @@ param(
     # 只有需要分发或存档时才拉回来（40MB 走公网要几十秒）。
     [switch]$PullApk,
 
+    # 打包成开机自启的 APK。透传给 build-autojs-project.js 的 --run-on-boot。
+    # 无人值守形态需要它：开机自启 -> 授权一次 -> 常驻循环。
+    # 与 -SkipGenerate 互斥：跳过生成时用的是现有 dist/project，改不了这个开关。
+    [switch]$RunOnBoot,
+
     # 等待手机上完成打包的上限（分钟）。
     [int]$WaitMinutes = 10
 )
@@ -50,11 +55,16 @@ function Get-DeviceLines {
 
 if ($Launch) { $Install = $true }
 
+if ($SkipGenerate -and $RunOnBoot) {
+    throw "-SkipGenerate 与 -RunOnBoot 冲突：跳过生成就用的是现有 dist/project，改不了开机自启开关"
+}
+
 # ---- 生成项目 ----
 if (-not $SkipGenerate) {
     Push-Location $projectRoot
     try {
-        npm run project
+        # npm 要用 -- 把参数透传给底层脚本，否则会被 npm 自己吃掉。
+        if ($RunOnBoot) { npm run project -- --run-on-boot } else { npm run project }
         if ($LASTEXITCODE -ne 0) { throw "npm run project 未通过" }
     }
     finally { Pop-Location }

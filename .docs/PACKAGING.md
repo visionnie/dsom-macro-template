@@ -77,6 +77,14 @@ npm run project
 
 可选参数：`--package`、`--version-name`、`--version-code`、`--libs`、`--abis`、`--run-on-boot`。
 
+`--run-on-boot` 决定 `project.json` 的 `launchConfig.runOnBoot`，**默认关闭**。
+它是无人值守形态的前提（开机自启 → 授权一次 → 常驻循环），不加就打不出会自启的包。
+走 `package-apk.ps1` 时用 `-RunOnBoot` 透传；该开关与 `-SkipGenerate` 互斥，
+因为跳过生成用的是现有 `dist/project`，改不了这个字段。
+
+**改了这个开关必须重新打包，不能只重装。** 它写在 `project.json` 里，
+在手机上点「打包应用」的那一刻被读进 APK。
+
 ## 素材与用例路径必须是相对路径
 
 配置里 `assetsRoot: "./assets"`，由运行时用 `files.path()` 解析为相对当前脚本的位置。
