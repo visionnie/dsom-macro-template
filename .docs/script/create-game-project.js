@@ -43,6 +43,7 @@ const genericPaths = [
   "src/core/case/case-schema-autojs.js",
   "src/core/case/case-runner-autojs.js",
   "src/core/errors-autojs.js",
+  "src/core/launcher-autojs.js",
   "src/core/logger-autojs.js",
   "src/core/ocr-autojs.js",
   "src/core/resident-autojs.js",

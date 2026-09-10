@@ -1,46 +1,21 @@
 // =====================================================================
-// 项目入口：选择任务并交给通用运行时执行
-// 输入参数：AutoJs6 execArgv.task；未提供时使用配置中的 defaultTask
+// 项目入口：打开应用先出菜单，而不是立即执行
+// =====================================================================
+// 为什么是菜单：点图标直接开跑，人就没有任何介入余地——想换个任务、想看上次
+// 跑成什么样、想录一条新用例，全都得回 PC 改配置重新打包。
+//
+// 但菜单和「无人值守」是打架的：开机自启后没人点菜单，常驻就永远起不来。
+// 解法是**带倒计时的菜单**：显示出来，若干秒无人操作就自动进常驻。
+// 人在就能选，人不在就自己走。倒计时秒数由 config.launcher.autoStartSeconds 控制，
+// 设为 0 表示不自动进入（开发调试时用）。
+//
+// 布局用字符串而不是 XML 字面量：npm run check 会对每个源文件跑 node --check，
+// 而 Node 解析不了 E4X 的 <vertical> 写法，写成字面量会让静态检查直接失败。
 // =====================================================================
 
-"auto";
+"ui";
 
 var config = require("../config/game-config-autojs.js");
-var taskRegistry = require("../task-registry-autojs.js");
-var runtime = require("../core/runtime-autojs.js");
+var launcher = require("../core/launcher-autojs.js");
 
-// 任务来源优先级：execArgv.task > 脚本同级的 task.txt > 配置里的 defaultTask。
-//
-// task.txt 是开发路径用的：run-task.ps1 的 -Task 会写它，省掉「改 defaultTask
-// 跑一次再改回来」的来回。它必须与 main.js 同级，用 files.path 解析——
-// 打包成 APK 后包内不存在这个文件，于是自动退回 defaultTask，
-// 不会出现"开发时选的任务被打进正式包"这种事。
-function getSelectedTaskId() {
-  try {
-    var executionArguments = engines.myEngine().execArgv;
-    if (executionArguments && executionArguments.task) {
-      return String(executionArguments.task);
-    }
-  } catch (error) {
-    console.log("未读取到任务参数: " + error);
-  }
-
-  try {
-    var overridePath = files.path("task.txt");
-    if (files.exists(overridePath)) {
-      var overrideId = String(files.read(overridePath)).replace(/^﻿/, "").trim();
-      if (overrideId) {
-        console.log("使用 task.txt 指定的任务: " + overrideId);
-        return overrideId;
-      }
-    }
-  } catch (error) {
-    console.log("读取 task.txt 失败，使用默认任务: " + error);
-  }
-
-  return config.defaultTask;
-}
-
-var selectedTaskId = getSelectedTaskId();
-var selectedTask = taskRegistry.get(selectedTaskId);
-runtime.run(config, selectedTask);
+launcher.start(config);

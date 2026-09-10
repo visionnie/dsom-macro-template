@@ -15,22 +15,42 @@
 
 `resident-runner` 就是那个不退出的进程。
 
-## 怎么跑
+## 入口：带倒计时的菜单
+
+打开应用**先出菜单，不立即执行**——点图标直接开跑的话，想换任务、想看上次结果、
+想录新用例，都得回 PC 改配置重新打包。
+
+但菜单和无人值守是打架的：开机自启后没人点菜单，常驻就永远起不来。
+解法是**倒计时**：菜单显示出来，`config.launcher.autoStartSeconds` 秒无人操作
+就自动进入 `autoStartTask`（默认 `resident-runner`）；人在设备前时任何一次点击都取消它。
+设为 `0` 表示永不自动进入，开发调试时用。
+
+菜单四项：开始常驻调度 / 任务列表 / 录制用例 / 运行记录。
+实现在 `src/core/launcher-autojs.js`，入口 `src/entry/main-autojs.js` 是 `"ui"` 模式。
+
+**开发路径不走菜单。** `run-task.ps1 -Task <id>` 会在脚本同级写一个 `task.txt`，
+launcher 见到它就直接跑那个任务并产出 `result.json`，不弹菜单挡在中间。
+打包成 APK 后包内没有这个文件，于是正常进菜单——两种形态共用同一份入口。
 
 ```powershell
 .\.docs\script\run-task.ps1 -Device <设备地址> -Task resident-runner
 ```
 
-打包成 APK 时把 `defaultTask` 设为 `resident-runner`，配合 `-RunOnBoot`，
-开机自启后人工点一次授权，之后不再需要人。
+打包时配合 `package-apk.ps1 -RunOnBoot`，开机自启 → 菜单倒计时 → 常驻，
+中间只需要人点一次截图授权。
 
 ## 分工
 
 | 文件 | 职责 |
 |---|---|
+| `src/core/launcher-autojs.js` | 菜单界面与倒计时。**不含任何游戏语义** |
 | `src/core/resident-autojs.js` | 循环、判定、结果累积。**不含任何游戏语义** |
 | `src/config/schedule-autojs.js` | 跑什么、什么时候跑。游戏相关的编排都在这里 |
 | `src/tasks/resident-runner-autojs.js` | 薄入口，把上面两个接起来 |
+
+界面上的任务必须跑在工作线程（`threads.start`）：任务里全是 `sleep` 和阻塞轮询，
+放在 UI 线程会直接卡死界面，连"正在运行"几个字都刷不出来。
+工作线程要更新界面得回到 `ui.run()` 里。
 
 ## 调度表字段
 
