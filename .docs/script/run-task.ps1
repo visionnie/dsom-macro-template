@@ -203,7 +203,10 @@ $statusColor = if ($result.status -eq 'passed') { 'Green' } else { 'Red' }
 Write-Host "结果: $($result.status)   耗时: $([math]::Round($result.durationMs / 1000, 2)) 秒" -ForegroundColor $statusColor
 foreach ($step in $result.steps) {
     $mark = if ($step.status -eq 'passed') { '通过' } else { $step.status }
-    Write-Host ("  [{0}] {1}  （尝试 {2} 次）" -f $mark, $step.name, $step.attempts)
+    # 任务型步骤有 attempts（运行时按 retryCount 重试）；JSON 用例的节点没有这个概念，
+    # 重试是靠 onFail 跳转表达的，硬印「尝试  次」会留下一个空洞。
+    $attemptSuffix = if ($null -ne $step.attempts) { "  （尝试 $($step.attempts) 次）" } else { "" }
+    Write-Host ("  [{0}] {1}{2}" -f $mark, $step.name, $attemptSuffix)
 }
 if ($result.error) {
     Write-Host ""
