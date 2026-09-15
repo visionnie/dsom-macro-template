@@ -21,7 +21,18 @@ function bringScriptToFront() {
     // 这里失败不退回 launchPackage：UI 模式下那条路会直接杀掉脚本页，
     // 静默退回只会把问题变成更难查的「脚本莫名结束」。
     var activityManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
-    activityManager.moveTaskToFront(activity.getTaskId(), 0);
+    try {
+      activityManager.moveTaskToFront(activity.getTaskId(), 0);
+    } catch (error) {
+      // 打包 APK 时 project.json 漏了 REORDER_TASKS 就会走到这里。开发路径的宿主 AutoJs6
+      // 自带该权限，所以这个错只在打包后出现——把修法写进报错，别让人再去翻 logcat。
+      if (String(error).indexOf("REORDER_TASKS") >= 0) {
+        throw new Error(
+          "切回前台缺少 android.permission.REORDER_TASKS 权限：打包时 project.json 的 permissions 必须包含它。原始错误: " + error
+        );
+      }
+      throw error;
+    }
     return "moveTaskToFront";
   }
   app.launchPackage(context.getPackageName());

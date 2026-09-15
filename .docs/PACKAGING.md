@@ -132,6 +132,15 @@ AutoJs6 打包界面会用自己的 schema 回写 `project.json`。以下字段�
 }
 ```
 
+### permissions 必须含 REORDER_TASKS
+
+运行时用 `moveTaskToFront` 把脚本页切回前台（申请截图权限前、录制停止后），
+它要求 `android.permission.REORDER_TASKS`。**缺了不影响开发路径**——宿主 AutoJs6 自带这个权限——
+所以只在打包后暴露：录制停止后复核页出不来，常驻与所有 `captureAfterLaunch` 任务在后台申请截图而超时。
+它是 normal 级权限，声明即在安装时自动授予。生成器已默认带上（2026-09-15 实测补上）。
+
+改了 permissions 同样**必须重新打包**，只重装旧 APK 没用。
+
 ### libs 是重点
 
 `libs` 控制打进 APK 的支持库，取值是打包界面上的可读名称。**必须包含 `OpenCV`**，

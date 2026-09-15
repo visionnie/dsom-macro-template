@@ -20,6 +20,9 @@ const config = require(path.join(projectRoot, "src/config/game-config-autojs.js"
 // 否则打包会直接失败并提示「缺少 xxx 所需的插件」。
 const DEFAULT_LIBS = ["OpenCV"];
 
+// REORDER_TASKS 不能少：运行时用 moveTaskToFront 把脚本页切回前台（申请截图权限前、录制停止后），
+// 缺它会抛 SecurityException。开发路径不受影响是因为宿主 AutoJs6 自带这个权限，
+// 所以只有打包后才暴露（2026-09-15 实测）。它是 normal 级权限，声明即在安装时自动授予。
 const DEFAULT_PERMISSIONS = [
   "android.permission.FOREGROUND_SERVICE",
   "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
@@ -28,6 +31,7 @@ const DEFAULT_PERMISSIONS = [
   "android.permission.MANAGE_EXTERNAL_STORAGE",
   "android.permission.READ_EXTERNAL_STORAGE",
   "android.permission.RECEIVE_BOOT_COMPLETED",
+  "android.permission.REORDER_TASKS",
   "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
   "android.permission.SYSTEM_ALERT_WINDOW",
   "android.permission.WAKE_LOCK",

@@ -347,10 +347,17 @@ function renderRecorder(config, state) {
           // 但复核页永远出不来（2026-09-15 实测）。所以切前台与等待都放进工作线程。
           threads.start(function () {
             // 录完把自己拉回前台，否则复核页显示在游戏后面看不见。
-            bringScriptToFront();
-            sleep(600);
+            // 切不回来也必须照常渲染复核页：会话已存盘，人从最近任务切回来还能接着框锚点。
+            // 不接住的话异常会让这个线程静默死掉，复核页永远出不来（APK 缺权限时实测）。
+            var message = "录制完成，已存盘";
+            try {
+              bringScriptToFront();
+              sleep(600);
+            } catch (error) {
+              message += "。未能自动切回前台，请从最近任务切回本应用: " + (error.message || error);
+            }
             ui.run(function () {
-              renderRecordingReview(config, state, session, "录制完成，已存盘");
+              renderRecordingReview(config, state, session, message);
             });
           });
         });
