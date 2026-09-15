@@ -70,7 +70,8 @@ npm run project
 
 | 内容 | 说明 |
 |---|---|
-| `main.js` | 打包后的单文件，即 `dist/main-autojs.js` |
+| `main.js` | 应用入口，即 `dist/main-autojs.js`（`"auto"` 模式，只负责分派） |
+| `menu-autojs.js` | 菜单，即 `dist/menu-autojs.js`（`"ui"` 模式），由 `main.js` 在主线程拉起；**必须与 `main.js` 同级** |
 | `assets/` | 找图素材，必须与 `main.js` 同级 |
 | `cases/` | JSON 用例，同样必须与 `main.js` 同级；`src/cases/` 不存在时跳过 |
 | `project.json` | AutoJs6 项目配置 |
@@ -80,8 +81,13 @@ npm run project
 **打包后的 APK 点图标不再立即执行，而是先出菜单**（开始常驻调度 / 任务列表 /
 录制用例 / 运行记录）。菜单带倒计时，若干秒无人操作会自动进入常驻调度，
 所以无人值守仍然成立。倒计时秒数见 `config.launcher.autoStartSeconds`，
-详见 `.docs/RESIDENT.md`。入口因此是 `"ui"` 模式——打包器会读入口文件的模式指令
-并提到产物顶部，改模式只需改入口。
+详见 `.docs/RESIDENT.md`。
+
+**入口拆成两个文件**：`main.js` 是 `"auto"`，只负责在主线程拉起 `menu-autojs.js`（`"ui"`）。
+**不能把入口直接做成 `"ui"`**：AutoJs6 启动 UI 脚本时先 startActivity、后登记执行，
+开机自启从工作线程调用，主线程一闲脚本页就查不到执行、立即 `onDestroy`，开机自启静默失败
+（2026-09-16 真机重启复现，读源码确认，修后用模拟开机验证）。
+打包器会读每个入口的模式指令并提到产物顶部；`src/entry/` 下每个入口各打一份到 `dist/`。
 
 `--run-on-boot` 决定 `project.json` 的 `launchConfig.runOnBoot`，**默认关闭**。
 它是无人值守形态的前提（开机自启 → 授权一次 → 常驻循环），不加就打不出会自启的包。

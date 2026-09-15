@@ -710,7 +710,7 @@ function renderRunning(config, state, taskId) {
 
 // 开发路径（run-task.ps1）会在脚本同级写一个 task.txt。它存在就说明这次是
 // 「跑指定任务并取回结果」，不该弹菜单挡在中间。打包成 APK 后包内没有这个文件，
-// 于是正常进入菜单——两种形态用同一份入口，不需要两个 entry。
+// 于是正常进入菜单。由无界面入口 main-autojs.js 读取并分派，菜单本身不再判断。
 function readTaskOverride() {
   try {
     var overridePath = files.path("task.txt");
@@ -735,16 +735,13 @@ function start(config) {
     lastStatus: ""
   };
 
-  var override = readTaskOverride();
-  if (override) {
-    runTaskInBackground(config, state, override);
-    return;
-  }
+  // task.txt 的分派在无界面入口 main-autojs.js 里做，走到这里就是要出菜单。
   renderMenu(config, state);
 }
 
 module.exports = {
   start: start,
+  readTaskOverride: readTaskOverride,
   readRecentRuns: readRecentRuns,
   statusLabel: statusLabel
 };

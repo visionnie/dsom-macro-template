@@ -127,6 +127,14 @@ fs.mkdirSync(outputDir, { recursive: true });
 // main.js 是 AutoJs6 项目约定的入口名，内容就是我们打好的单文件。
 fs.copyFileSync(bundlePath, path.join(outputDir, "main.js"));
 
+// 菜单是第二个入口，由 main.js 在主线程拉起（原因见 src/entry/main-autojs.js）。
+// 文件名必须与入口里的 MENU_SCRIPT 一致，且与 main.js 同级；漏了它 APK 点开什么都不出。
+const menuBundlePath = path.join(projectRoot, "dist/menu-autojs.js");
+if (!fs.existsSync(menuBundlePath)) {
+  throw new Error("缺少菜单构建产物，请先执行 npm run build: " + menuBundlePath);
+}
+fs.copyFileSync(menuBundlePath, path.join(outputDir, "menu-autojs.js"));
+
 // 素材必须与 main.js 同级，配置里的 ./assets 才解析得到。
 const assetCount = copyDirectory(
   assetsDir,

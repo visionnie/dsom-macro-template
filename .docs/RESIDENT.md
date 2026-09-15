@@ -26,7 +26,9 @@
 设为 `0` 表示永不自动进入，开发调试时用。
 
 菜单四项：开始常驻调度 / 任务列表 / 录制用例 / 运行记录。
-实现在 `src/core/launcher-autojs.js`，入口 `src/entry/main-autojs.js` 是 `"ui"` 模式。
+实现在 `src/core/launcher-autojs.js`。入口拆成两个：`src/entry/main-autojs.js` 是 `"auto"` 模式，
+只负责分派（有 `task.txt` 直接跑任务，否则在主线程拉起菜单）；菜单是 `src/entry/menu-autojs.js`（`"ui"`）。
+**别把入口改回 `"ui"`**——那样开机自启会静默失败，原因见 `main-autojs.js` 文件头。
 
 **开发路径不走菜单。** `run-task.ps1 -Task <id>` 会在脚本同级写一个 `task.txt`，
 launcher 见到它就直接跑那个任务并产出 `result.json`，不弹菜单挡在中间。

@@ -116,6 +116,11 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $bundle)) { throw "找不到构建产物: $bundle" }
 Invoke-Adb @('shell', "mkdir -p $deviceDir") | Out-Null
 Invoke-Adb @('push', $bundle, $deviceScript) | Out-Null
+# 菜单是第二个入口（界面），入口在没有 task.txt 时于主线程拉起它，必须与入口同级。
+# 本脚本走 task.txt 用不到菜单，但推上去能保证设备上两份始终是同一次构建。
+$menuBundle = Join-Path $projectRoot 'dist/menu-autojs.js'
+if (-not (Test-Path $menuBundle)) { throw "找不到菜单构建产物: $menuBundle" }
+Invoke-Adb @('push', $menuBundle, "$deviceDir/menu-autojs.js") | Out-Null
 
 # 任务选择通过 task.txt 传给设备侧入口。每次都显式写或删，
 # 否则上一轮 -Task 留下的文件会悄悄劫持这一轮的 defaultTask。
