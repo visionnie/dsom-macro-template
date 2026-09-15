@@ -68,7 +68,11 @@ function renderMenu(config, state) {
 
   // 倒计时的意义：开机自启后没人点菜单，常驻必须自己起来；
   // 而人站在设备前时，任何一次点击都应该立刻取消它。
-  if (autoSeconds > 0) {
+  // 只在第一次显示菜单时倒计时。任务跑完、从子页面返回都会重新渲染菜单，
+  // 若每次都倒计时，人手动跑完一个任务、10 秒没碰屏幕就被拖进常驻（2026-09-15 实测）。
+  var shouldCountDown = autoSeconds > 0 && !state.autoStartConsumed;
+  state.autoStartConsumed = true;
+  if (shouldCountDown) {
     ui.countdownText.setText(remaining + " 秒后自动进入常驻调度（点任意按钮取消）");
     countdownTimer = setInterval(function () {
       remaining -= 1;
