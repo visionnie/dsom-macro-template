@@ -272,7 +272,64 @@ function start(context, config, onStop) {
   };
 }
 
+// 读回已存盘的会话，供「打开已有录制」回到复核页继续框锚点、生成用例、回放。
+// 返回结构与 createSession 的内存对象一致，saveSession 可以原样写回。
+function loadSession(dir) {
+  var path = dir + "/session.json";
+  if (!files.exists(path)) {
+    throw new Error("会话文件不存在: " + path);
+  }
+  var raw = files.read(path);
+  if (raw && raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  var data = JSON.parse(raw);
+  // saveSession 会 new Date(startedAt)，这里必须还原成毫秒数，否则再存盘就是 Invalid Date。
+  var startedAt = Date.parse(data.startedAt);
+  return {
+    id: String(data.sessionId),
+    dir: dir,
+    startedAt: isNaN(startedAt) ? Date.now() : startedAt,
+    baseline: data.baseline,
+    nodes: data.nodes || [],
+    shots: data.shots || []
+  };
+}
+
+// 列出录制会话，最新的在前。打不开的会话标出来而不是跳过：人得知道有东西坏了。
+function listSessions(config, limit) {
+  var root = config.outputRoot + "/recordings";
+  var rows = [];
+  if (!files.exists(root)) return rows;
+  var names = files.listDir(root, function (name) {
+    return files.isDir(root + "/" + name);
+  });
+  for (var i = 0; i < names.length; i++) {
+    var dir = root + "/" + names[i];
+    if (!files.exists(dir + "/session.json")) continue;
+    var row = { id: names[i], dir: dir, sortKey: Number(names[i]) || 0 };
+    try {
+      var session = loadSession(dir);
+      var upgraded = 0;
+      for (var n = 0; n < session.nodes.length; n++) {
+        if (session.nodes[n].type === "tapImage") upgraded++;
+      }
+      row.stepCount = session.nodes.length;
+      row.upgradedCount = upgraded;
+      row.hasCase = files.exists(dir + "/case.json");
+      row.startedAt = session.startedAt;
+    } catch (error) {
+      row.broken = String(error && error.message ? error.message : error);
+    }
+    rows.push(row);
+  }
+  rows.sort(function (a, b) {
+    return b.sortKey - a.sortKey;
+  });
+  return limit ? rows.slice(0, limit) : rows;
+}
+
 module.exports = {
   start: start,
-  saveSession: saveSession
+  saveSession: saveSession,
+  loadSession: loadSession,
+  listSessions: listSessions
 };

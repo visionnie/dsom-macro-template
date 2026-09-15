@@ -299,6 +299,7 @@ function renderRecorder(config, state) {
           '      <text textSize="13sp" textColor="#c62828" marginTop="10" text="小条所在的左上角区域不会被记录，那里是「停止」和「撤销」。"/>',
           '      <text textSize="13sp" textColor="#555555" marginTop="10" text="录完在复核页把关键步骤升级成「点击图片」并框选锚点——死坐标换个分辨率就偏，锚点才稳。"/>',
           '      <button id="startButton" text="开始录制" style="Widget.AppCompat.Button.Colored" h="52" marginTop="20"/>',
+          '      <button id="openButton" text="打开已有录制" h="52" marginTop="12"/>',
           '      <text id="recorderHint" text="" textSize="12sp" textColor="#666666" marginTop="12"/>',
           "    </vertical>",
           "  </ScrollView>",
@@ -309,6 +310,11 @@ function renderRecorder(config, state) {
 
   ui.backButton.on("click", function () {
     renderMenu(config, state);
+  });
+
+  // 离开复核页之后还想接着框锚点、重新生成或回放，从这里回到那次会话，不必重录。
+  ui.openButton.on("click", function () {
+    renderRecordingList(config, state);
   });
 
   ui.startButton.on("click", function () {
@@ -363,6 +369,63 @@ function renderRecorder(config, state) {
         });
       });
     });
+  });
+}
+
+// ---- 已有录制 ----
+// 列出磁盘上的录制会话，点一次进复核页。复核页的框锚点、生成、回放对读回的会话同样可用。
+function renderRecordingList(config, state) {
+  var recorder = require("./recorder-autojs.js");
+  var sessions = recorder.listSessions(config, RECENT_RUN_LIMIT);
+  var rows = [];
+  for (var i = 0; i < sessions.length; i++) {
+    var item = sessions[i];
+    rows.push({
+      dir: item.dir,
+      title: item.startedAt ? formatTime(new Date(item.startedAt).toISOString()) + "　" + item.id : item.id,
+      titleColor: item.broken ? "#c62828" : "#212121",
+      subtitle: item.broken
+        ? "打不开: " + firstLine(item.broken)
+        : "共 " + item.stepCount + " 步，已升级 " + item.upgradedCount + " 步" +
+          (item.hasCase ? "　已生成用例" : "")
+    });
+  }
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#fafafa" h="*">']
+        .concat(pageHeader("已有录制"))
+        .concat([
+          '  <list id="recordingList" layout_weight="1">',
+          '    <vertical padding="16 12" bg="#ffffff" w="*">',
+          '      <text text="{{title}}" textSize="15sp" textColor="{{titleColor}}"/>',
+          '      <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
+          "    </vertical>",
+          "  </list>",
+          '  <text id="recordingHint" text="" textSize="12sp" textColor="#666666" padding="16 10"/>',
+          "</vertical>"
+        ])
+    )
+  );
+
+  ui.recordingList.setDataSource(rows);
+  ui.recordingHint.setText(
+    rows.length > 0
+      ? "共 " + rows.length + " 次，最新在上。点一次录制进入复核页"
+      : "还没有录制。回上一页开始录制。"
+  );
+  ui.backButton.on("click", function () {
+    renderRecorder(config, state);
+  });
+  ui.recordingList.on("item_click", function (item) {
+    var session;
+    try {
+      session = recorder.loadSession(item.dir);
+    } catch (error) {
+      toast("打不开这次录制: " + (error.message || error));
+      return;
+    }
+    renderRecordingReview(config, state, session, "已打开录制 " + session.id);
   });
 }
 
