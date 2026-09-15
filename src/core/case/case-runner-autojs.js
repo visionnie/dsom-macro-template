@@ -81,6 +81,11 @@ function validateCase(data) {
       throw new Error("baseline 必须包含 width 与 height");
     }
   }
+  // 素材相对谁解析："assets"（默认）走项目的 assetsRoot；"case" 相对用例文件所在目录。
+  // 录制出来的用例必须用 "case"：锚点图是在设备上现框的，而打包后的 assets 是只读的。
+  if (data.assetBase != null && data.assetBase !== "assets" && data.assetBase !== "case") {
+    throw new Error("assetBase 只能是 assets 或 case，实际 " + data.assetBase);
+  }
   // 前置依赖：本用例假定哪些任务已经跑过（例如 BOSS 用例假定游戏已在主城）。
   // case-runner 自己不执行它们——单跑一条用例时依赖由人负责；
   // 常驻调度器会读这个字段，按序补齐前置。
@@ -171,7 +176,25 @@ function validateJumpTarget(target, nodeId, field, seenIds, allNodes) {
   // 真正的存在性检查在执行时兜底。
 }
 
-function runCase(context, caseData) {
+// assetBase 为 case 时，把上下文的素材解析换成「相对用例文件所在目录」。
+// 换的是一份浅拷贝，调用方的 context 不受影响。
+function withCaseAssets(context, caseData, options) {
+  if (caseData.assetBase !== "case") return context;
+  var caseDir = options && options.caseDir;
+  if (!caseDir) {
+    throw new Error("用例 assetBase 为 case，但调用方没有传入 caseDir");
+  }
+  var scoped = {};
+  for (var key in context) scoped[key] = context[key];
+  scoped.assetPath = function (relativePath) {
+    return caseDir + "/" + relativePath;
+  };
+  return scoped;
+}
+
+// options.caseDir：用例文件所在目录，assetBase 为 case 时必填。
+function runCase(context, caseData, options) {
+  context = withCaseAssets(context, caseData, options);
   var nodes = caseData.nodes;
   var idToIndex = {};
   for (var i = 0; i < nodes.length; i++) idToIndex[nodes[i].id] = i;

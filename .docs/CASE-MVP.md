@@ -41,6 +41,12 @@
 | `orientationWaitMs` | 否 | 等待屏幕转到 baseline 方向的上限，默认 20000 |
 | `orientationPollMs` | 否 | 上述等待的轮询间隔，默认 1000 |
 | `requires` | 否 | 前置任务 id 数组。本用例假定它们已经跑过 |
+| `assetBase` | 否 | 素材相对谁解析：`assets`（默认，走项目 `assetsRoot`）或 `case`（相对用例文件所在目录） |
+
+**`assetBase: "case"` 是给录制用例用的。** 锚点图是在设备上现框的，而打包后的
+`assets/` 在 APK 里是只读的，所以录制用例和它的锚点图一起放在会话目录里。
+这种用例由调用方传 `runCase(context, caseData, { caseDir })`，不传直接抛错。
+`npm run check` 对它按用例文件所在目录校验素材存在性。
 
 **陷阱**：真实用例 `boss-feast-layer3.json` 里还写着 `launchGame` / `requiresCapture` /
 `captureAfterLaunch`。**`case-runner` 完全不读这三个字段。** 它们的生效位置是任务模块
@@ -194,9 +200,9 @@ JSON 带 UTF-8 BOM 也能正常解析：Windows 上保存 JSON 常常带 BOM，
 
 ## 已知缺口
 
-**录制器还没开始做。** 用例目前全靠手写 JSON。设计早已定死（三种动作类型、
-锚点由用户手工框选），见 `RECORDER-RESEARCH.md`，但一行代码没写。
-这是当前最大的一块。
+**录制出来的用例进不了任务登记表。** 录制器已能生成并回放用例（见 `RECORDER.md`），
+但产物在设备的会话目录里，要进常驻调度，仍需拷回 `src/cases/`、把 `assetBase` 改回
+`assets` 并把锚点移进 `src/assets/`，再照下方「加一条新用例」登记。
 
 较小的：
 

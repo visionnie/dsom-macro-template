@@ -133,13 +133,17 @@ function checkCases() {
     }
 
     // 2. 素材文件存在性。素材缺失在设备上是 broken，但完全可以在这里拦住。
+    //    assetBase 为 case 时素材相对用例文件所在目录，与设备侧 case-runner 的解析规则一致。
+    const assetRoot = data.assetBase === "case"
+      ? path.dirname(casePath)
+      : path.join(projectRoot, "src/assets");
     for (const node of data.nodes) {
       if (node.type !== "tapImage" || !node.asset) continue;
-      const assetPath = path.join(projectRoot, "src/assets", node.asset);
+      const assetPath = path.join(assetRoot, node.asset);
       if (!fs.existsSync(assetPath)) {
         throw new Error(
           "用例引用的素材不存在: " + relative +
-            " 节点 [" + node.id + "] -> src/assets/" + node.asset
+            " 节点 [" + node.id + "] -> " + path.relative(projectRoot, assetPath)
         );
       }
     }

@@ -82,7 +82,7 @@ function saveSession(session) {
     sessionId: session.id,
     startedAt: new Date(session.startedAt).toISOString(),
     finishedAt: new Date().toISOString(),
-    baseline: { width: device.width, height: device.height },
+    baseline: session.baseline || { width: device.width, height: device.height },
     nodes: session.nodes,
     shots: session.shots
   };
@@ -142,6 +142,11 @@ function start(context, config, onStop) {
     stopped = true;
     try { capture.close(); } catch (error) {}
     try { pill.close(); } catch (error) {}
+    // 基线在停止这一刻定下来并随会话保存，取第一步截图的尺寸。
+    // 之后复核页（竖屏）改完节点还会再存盘，若那时实时读 device，基线会被悄悄改成竖屏。
+    session.baseline = session.shots.length > 0
+      ? { width: session.shots[0].deviceWidth, height: session.shots[0].deviceHeight }
+      : { width: device.width, height: device.height };
     var savedPath = saveSession(session);
     logger.info("录制结束，共 " + session.nodes.length + " 步，已保存: " + savedPath);
     onStop(session, savedPath);

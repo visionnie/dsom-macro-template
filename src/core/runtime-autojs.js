@@ -39,13 +39,15 @@ function createAssetResolver(config) {
   };
 }
 
-// 把脚本自身切回前台。仅用于申请截图权限之前：
-// 无论是 AutoJs6 里运行还是打包成独立 APK，context.getPackageName() 都能拿到当前宿主包名。
+// 把脚本自身切回前台。仅用于申请截图权限之前。
+// 日志保留宿主包名：org.autojs.autojs6 是开发路径，打包 APK 是自己的包名，排查两个宿主抢
+// MediaProjection 时靠这一行区分。切回的具体途径见 foreground-autojs.js。
 function bringSelfToForeground(logger, config) {
   try {
+    var foreground = require("./foreground-autojs.js");
     var selfPackage = context.getPackageName();
-    logger.info("将脚本自身切回前台以申请截图权限: " + selfPackage);
-    app.launchPackage(selfPackage);
+    var via = foreground.bringScriptToFront();
+    logger.info("将脚本自身切回前台以申请截图权限: " + selfPackage + "（" + via + "）");
     sleep(config.runtime.foregroundSettleMs || 3000);
   } catch (error) {
     // 切不回去也继续尝试申请，失败时由 requestPermission 报出明确原因。

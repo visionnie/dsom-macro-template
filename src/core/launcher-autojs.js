@@ -338,11 +338,16 @@ function renderRecorder(config, state) {
 
       ui.run(function () {
         recorder.start(recordingContext, config, function (session, savedPath) {
-          // 录完把自己拉回前台，否则复核页显示在游戏后面看不见。
-          app.launchPackage(context.getPackageName());
-          sleep(600);
-          ui.run(function () {
-            renderRecordingReview(config, state, session, savedPath);
+          // 这个回调来自「停止」按钮的点击，跑在 UI 线程上。UI 线程里 sleep 会抛
+          // 「UI 线程内无法执行阻塞操作」，整个脚本随之退出——session.json 已存盘，
+          // 但复核页永远出不来（2026-09-15 实测）。所以切前台与等待都放进工作线程。
+          threads.start(function () {
+            // 录完把自己拉回前台，否则复核页显示在游戏后面看不见。
+            bringScriptToFront();
+            sleep(600);
+            ui.run(function () {
+              renderRecordingReview(config, state, session, "录制完成，已存盘");
+            });
           });
         });
       });
@@ -350,16 +355,26 @@ function renderRecorder(config, state) {
   });
 }
 
+// 把脚本自己的界面拉回前台。为什么不能用 app.launchPackage 见 foreground-autojs.js。
+function bringScriptToFront() {
+  require("./foreground-autojs.js").bringScriptToFront();
+}
+
 // ---- 录制结果复核 ----
-function renderRecordingReview(config, state, session, savedPath) {
+// 录出来的全是死坐标。这一页负责把关键步骤升级成找图点击，再生成可回放的用例。
+function renderRecordingReview(config, state, session, message) {
   var rows = [];
+  var upgradedCount = 0;
   for (var i = 0; i < session.nodes.length; i++) {
     var node = session.nodes[i];
+    var shot = session.shots[i];
+    var isImage = node.type === "tapImage";
+    if (isImage) upgradedCount++;
     rows.push({
-      title: node.name + "　" + node.type,
-      subtitle:
-        "rx " + node.rx + "　ry " + node.ry +
-        (node.postWaitMs ? "　停顿 " + node.postWaitMs + "ms" : "")
+      index: i,
+      title: node.name + "　" + (isImage ? "找图点击" : "坐标点击"),
+      titleColor: isImage ? "#2e7d32" : "#212121",
+      subtitle: describeRecordedNode(node, shot)
     });
   }
 
@@ -371,34 +386,281 @@ function renderRecordingReview(config, state, session, savedPath) {
           '  <text id="reviewSummary" text="" textSize="13sp" textColor="#555555" padding="16 12"/>',
           '  <list id="reviewList" layout_weight="1">',
           '    <vertical padding="16 12" bg="#ffffff" w="*">',
-          '      <text text="{{title}}" textSize="15sp" textColor="#212121"/>',
+          '      <text text="{{title}}" textSize="15sp" textColor="{{titleColor}}"/>',
           '      <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
           "    </vertical>",
           "  </list>",
-          '  <text textSize="12sp" textColor="#666666" padding="16 10" text="会话已存盘。把它变成可回放用例还需要框锚点，当前版本请把 session.json 拉回 PC 处理。"/>',
+          '  <text textSize="12sp" textColor="#666666" padding="16 6" text="点一步进入框选锚点。死坐标换个分辨率就偏，关键步骤请升级成找图点击。"/>',
+          '  <horizontal padding="8 4">',
+          '    <button id="generateButton" text="生成用例" layout_weight="1"/>',
+          '    <button id="replayButton" text="生成并回放" style="Widget.AppCompat.Button.Colored" layout_weight="1"/>',
+          "  </horizontal>",
           "</vertical>"
         ])
     )
   );
 
   ui.reviewSummary.setText(
-    "共 " + session.nodes.length + " 步　已保存到\n" + savedPath
+    (message ? message + "\n" : "") +
+      "共 " + session.nodes.length + " 步，已升级 " + upgradedCount + " 步\n" + session.dir
   );
   ui.reviewList.setDataSource(rows);
+  ui.reviewList.on("item_click", function (item) {
+    renderAnchorPicker(config, state, session, item.index);
+  });
   ui.backButton.on("click", function () {
     renderMenu(config, state);
+  });
+  ui.generateButton.on("click", function () {
+    try {
+      var casePath = writeRecordedCase(session);
+      renderRecordingReview(config, state, session, "已生成用例: " + casePath);
+    } catch (error) {
+      renderRecordingReview(config, state, session, "生成失败: " + (error.message || error));
+    }
+  });
+  ui.replayButton.on("click", function () {
+    var casePath;
+    try {
+      casePath = writeRecordedCase(session);
+    } catch (error) {
+      renderRecordingReview(config, state, session, "生成失败: " + (error.message || error));
+      return;
+    }
+    runTaskInBackground(config, state, createRecordedCaseTask(session, casePath));
+  });
+}
+
+function describeRecordedNode(node, shot) {
+  var parts = [];
+  if (node.type === "tapImage") {
+    var box = shot && shot.anchorBox;
+    parts.push(box ? "锚点 " + box.width + "x" + box.height : "锚点 " + node.asset);
+    if (node.offset) parts.push("偏移 " + node.offset.rx + "," + node.offset.ry);
+  } else if (shot) {
+    parts.push("坐标 (" + shot.x + "," + shot.y + ")");
+  }
+  if (shot) parts.push(shot.deviceWidth + "x" + shot.deviceHeight);
+  if (node.postWaitMs) parts.push("停顿 " + node.postWaitMs + "ms");
+  return parts.join("　");
+}
+
+// 生成的用例与锚点图放在同一个会话目录，用例以 assetBase: "case" 相对自身引用锚点。
+// 写盘前用设备侧同一份 validateCase 校验，坏用例不落盘。
+function writeRecordedCase(session) {
+  var recordedCase = require("./case/recorded-case-autojs.js");
+  var caseRunner = require("./case/case-runner-autojs.js");
+  var caseData = recordedCase.buildCase(session);
+  caseRunner.validateCase(caseData);
+  var casePath = session.dir + "/case.json";
+  files.write(casePath, JSON.stringify(caseData, null, 2) + "\n");
+  return casePath;
+}
+
+// 回放用的临时任务，不进任务登记表：录制用例是设备上现生成的数据，不是仓库里的代码。
+function createRecordedCaseTask(session, casePath) {
+  var caseRunner = require("./case/case-runner-autojs.js");
+  return {
+    id: "recorded-case",
+    name: "回放录制 " + session.id,
+    // 与业务用例一致：先确保游戏在前台，再申请截图权限（有的盒子启动时检测录屏）。
+    launchGame: true,
+    requiresCapture: true,
+    captureAfterLaunch: true,
+    run: function (taskContext) {
+      var caseData = caseRunner.loadCase(casePath);
+      return caseRunner.runCase(taskContext, caseData, { caseDir: session.dir });
+    }
+  };
+}
+
+// ---- 框选锚点 ----
+// 锚点坚持人工框：自动挑会把动态背景框进去，平均像素差 26 就再也匹配不上。
+function renderAnchorPicker(config, state, session, index) {
+  var recorder = require("./recorder-autojs.js");
+  var recordedCase = require("./case/recorded-case-autojs.js");
+  var node = session.nodes[index];
+  var shot = session.shots[index];
+
+  var image = shot && shot.path && files.exists(shot.path) ? images.read(shot.path) : null;
+  if (!image) {
+    renderRecordingReview(config, state, session, node.name + " 没有截图，无法框选锚点");
+    return;
+  }
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#000000" h="*">']
+        .concat(pageHeader(node.name + " 框选锚点"))
+        .concat([
+          '  <canvas id="board" layout_weight="1"/>',
+          '  <text textColor="#dddddd" textSize="12sp" padding="12 6" text="在截图上拖出一个框，框住稳定不变的图案（按钮、标题），别框动态背景。红点是当时点下去的位置，可以不在框里。"/>',
+          '  <horizontal padding="8 4" bg="#fafafa">',
+          '    <button id="confirmButton" text="升级找图" style="Widget.AppCompat.Button.Colored" layout_weight="1"/>',
+          '    <button id="keepButton" text="保持坐标" layout_weight="1"/>',
+          '    <button id="deleteButton" text="删除此步" layout_weight="1"/>',
+          "  </horizontal>",
+          "</vertical>"
+        ])
+    )
+  );
+
+  var imageWidth = image.getWidth();
+  var imageHeight = image.getHeight();
+  var placement = null;
+  var dragBox = null;
+  var closed = false;
+
+  var boxPaint = new Paint();
+  boxPaint.setStyle(Paint.Style.STROKE);
+  boxPaint.setStrokeWidth(4);
+  boxPaint.setColor(colors.parseColor("#ff5252"));
+  var tapPaint = new Paint();
+  tapPaint.setStyle(Paint.Style.FILL);
+  tapPaint.setColor(colors.parseColor("#ff1744"));
+
+  ui.board.on("draw", function (canvas) {
+    // 离开本页后图片会被回收，画布线程可能还会再回调一两帧。
+    if (closed) return;
+    var canvasWidth = canvas.getWidth();
+    var canvasHeight = canvas.getHeight();
+    var scale = Math.min(canvasWidth / imageWidth, canvasHeight / imageHeight);
+    placement = {
+      scale: scale,
+      offsetX: (canvasWidth - imageWidth * scale) / 2,
+      offsetY: (canvasHeight - imageHeight * scale) / 2
+    };
+    canvas.drawColor(colors.parseColor("#000000"));
+    canvas.drawBitmap(
+      image.getBitmap(),
+      null,
+      new android.graphics.RectF(
+        placement.offsetX,
+        placement.offsetY,
+        placement.offsetX + imageWidth * scale,
+        placement.offsetY + imageHeight * scale
+      ),
+      null
+    );
+    canvas.drawCircle(placement.offsetX + shot.x * scale, placement.offsetY + shot.y * scale, 8, tapPaint);
+
+    if (dragBox) {
+      canvas.drawRect(
+        Math.min(dragBox.x1, dragBox.x2), Math.min(dragBox.y1, dragBox.y2),
+        Math.max(dragBox.x1, dragBox.x2), Math.max(dragBox.y1, dragBox.y2),
+        boxPaint
+      );
+    } else if (shot.anchorBox) {
+      var box = shot.anchorBox;
+      canvas.drawRect(
+        placement.offsetX + box.left * scale,
+        placement.offsetY + box.top * scale,
+        placement.offsetX + (box.left + box.width) * scale,
+        placement.offsetY + (box.top + box.height) * scale,
+        boxPaint
+      );
+    }
+  });
+
+  ui.board.setOnTouchListener(function (view, event) {
+    var action = event.getAction();
+    var x = event.getX();
+    var y = event.getY();
+    if (action === event.ACTION_DOWN) {
+      dragBox = { x1: x, y1: y, x2: x, y2: y };
+    } else if (dragBox && (action === event.ACTION_MOVE || action === event.ACTION_UP)) {
+      dragBox.x2 = x;
+      dragBox.y2 = y;
+    }
+    return true;
+  });
+
+  // 先换页再回收：画布随布局一起销毁，晚一点回收图片，避免最后一帧画到已回收的位图。
+  function leave(message) {
+    renderRecordingReview(config, state, session, message);
+    closed = true;
+    setTimeout(function () {
+      try { image.recycle(); } catch (error) {}
+    }, 500);
+  }
+
+  ui.backButton.on("click", function () {
+    leave();
+  });
+
+  ui.confirmButton.on("click", function () {
+    if (!dragBox || !placement) {
+      toast("先在截图上拖出一个框");
+      return;
+    }
+    var imageBox;
+    var upgraded;
+    try {
+      imageBox = recordedCase.viewBoxToImageBox(dragBox, placement, imageWidth, imageHeight);
+      upgraded = recordedCase.toTapImageNode(node, shot, imageBox);
+    } catch (error) {
+      toast(error.message || String(error));
+      return;
+    }
+    ui.confirmButton.setEnabled(false);
+    // 裁图与写盘放工作线程，别卡住界面。
+    threads.start(function () {
+      var anchorPath = session.dir + "/" + upgraded.asset;
+      try {
+        files.ensureDir(anchorPath.substring(0, anchorPath.lastIndexOf("/") + 1));
+        var clip = images.clip(image, imageBox.left, imageBox.top, imageBox.width, imageBox.height);
+        try {
+          images.save(clip, anchorPath, "png", 100);
+        } finally {
+          clip.recycle();
+        }
+        session.nodes[index] = upgraded;
+        shot.anchorBox = imageBox;
+        recorder.saveSession(session);
+      } catch (error) {
+        ui.run(function () {
+          toast("锚点保存失败: " + error);
+          ui.confirmButton.setEnabled(true);
+        });
+        return;
+      }
+      ui.run(function () {
+        leave(node.name + " 已升级为找图点击（锚点 " + imageBox.width + "x" + imageBox.height + "）");
+      });
+    });
+  });
+
+  ui.keepButton.on("click", function () {
+    if (node.type !== "tapImage") {
+      leave();
+      return;
+    }
+    session.nodes[index] = recordedCase.toTapNode(node, shot);
+    delete shot.anchorBox;
+    recorder.saveSession(session);
+    leave(node.name + " 已还原为坐标点击");
+  });
+
+  // 只从会话里摘掉，截图与锚点文件留在磁盘上：误删还能从文件找回来。
+  ui.deleteButton.on("click", function () {
+    session.nodes.splice(index, 1);
+    session.shots.splice(index, 1);
+    recorder.saveSession(session);
+    leave("已删除 " + node.name);
   });
 }
 
 // ---- 执行任务 ----
 // 必须跑在工作线程：任务里全是 sleep 和阻塞轮询，放在 UI 线程会直接卡死界面，
 // 连"正在运行"这几个字都刷不出来。
-function runTaskInBackground(config, state, taskId) {
+// taskOrId：登记表里的任务 ID，或现造的任务对象（如录制用例的回放）。
+function runTaskInBackground(config, state, taskOrId) {
   if (busy) {
     toast("已有任务在运行");
     return;
   }
   busy = true;
+  var taskId = typeof taskOrId === "string" ? taskOrId : taskOrId.id;
   state.lastStatus = "正在运行: " + taskId;
 
   renderRunning(config, state, taskId);
@@ -407,7 +669,7 @@ function runTaskInBackground(config, state, taskId) {
     var registry = require("../task-registry-autojs.js");
     var summary;
     try {
-      var task = registry.get(taskId);
+      var task = typeof taskOrId === "string" ? registry.get(taskOrId) : taskOrId;
       runtime.run(config, task);
       summary = "完成: " + taskId;
     } catch (error) {
