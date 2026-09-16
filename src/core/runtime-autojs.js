@@ -8,6 +8,7 @@ var screenModule = require("./screen-autojs.js");
 var actionsModule = require("./actions-autojs.js");
 var ocrModule = require("./ocr-autojs.js");
 var workflow = require("./workflow-autojs.js");
+var errors = require("./errors-autojs.js");
 
 function validateConfig(config) {
   if (!config.project || !config.project.id || !config.project.name) {
@@ -38,13 +39,15 @@ function createAssetResolver(config) {
   };
 }
 
-// 把脚本自身切回前台。仅用于申请截图权限之前：
-// 无论是 AutoJs6 里运行还是打包成独立 APK，context.getPackageName() 都能拿到当前宿主包名。
+// 把脚本自身切回前台。仅用于申请截图权限之前。
+// 日志保留宿主包名：org.autojs.autojs6 是开发路径，打包 APK 是自己的包名，排查两个宿主抢
+// MediaProjection 时靠这一行区分。切回的具体途径见 foreground-autojs.js。
 function bringSelfToForeground(logger, config) {
   try {
+    var foreground = require("./foreground-autojs.js");
     var selfPackage = context.getPackageName();
-    logger.info("将脚本自身切回前台以申请截图权限: " + selfPackage);
-    app.launchPackage(selfPackage);
+    var via = foreground.bringScriptToFront();
+    logger.info("将脚本自身切回前台以申请截图权限: " + selfPackage + "（" + via + "）");
     sleep(config.runtime.foregroundSettleMs || 3000);
   } catch (error) {
     // 切不回去也继续尝试申请，失败时由 requestPermission 报出明确原因。
@@ -85,12 +88,20 @@ function getErrorDetail(error) {
   return stack ? message + "\n" + stack : message;
 }
 
+// 任务 id 会被当成目录名用。登记表里的 id 都是小写字母数字连字符，本来无所谓，
+// 但现造的任务不一定——录制用例是 recorded:<会话 id>，冒号在 Windows 上根本
+// 建不了文件，run-task.ps1 的 adb pull 会取不回结果，而设备侧不会报任何错。
+// 只清洗路径这一段，任务 id 本身保持原样，日志和 result.json 里仍是它真实的 id。
+function toPathSegment(taskId) {
+  return String(taskId).replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
 function run(config, task) {
   validateConfig(config);
 
   var startedAt = new Date();
   var runId = startedAt.getTime();
-  var outputDir = config.outputRoot + "/" + task.id + "/" + runId;
+  var outputDir = config.outputRoot + "/" + toPathSegment(task.id) + "/" + runId;
   var logger = loggerModule.create({ outputDir: outputDir });
   var screen = screenModule.create({
     logger: logger,
@@ -135,7 +146,7 @@ function run(config, task) {
         device.width !== config.screen.width ||
         device.height !== config.screen.height
       ) {
-        throw new Error(
+        throw errors.broken(
           "屏幕尺寸不匹配，期望 " +
             config.screen.width +
             "x" +
@@ -201,9 +212,13 @@ function run(config, task) {
     result.status = "passed";
     logger.info("任务完成: " + task.name);
   } catch (error) {
-    result.status = "failed";
+    // broken = 环境或前置条件不成立（权限、启动、素材、屏幕），failed = 用例真没通过。
+    // 两者必须分开统计，否则通过率会失去意义。
+    result.status = errors.statusOf(error);
     result.error = getErrorDetail(error);
-    logger.error("任务失败: " + result.error);
+    logger.error(
+      (result.status === "broken" ? "任务中断（环境问题）: " : "任务失败: ") + result.error
+    );
     if (screen.hasPermission()) {
       try {
         result.failureScreenshot = screen.saveStage("task-failed");

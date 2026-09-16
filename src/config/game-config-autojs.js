@@ -12,6 +12,13 @@ module.exports = {
     packageName: ""
   },
   outputRoot: "/sdcard/Download/dsom-macro-template",
+  // 打开应用先出菜单，不立即执行。
+  // autoStartSeconds 是无人值守的退路：开机自启后没人点菜单，
+  // 倒计时结束就自己进常驻调度；人在设备前时任何一次点击都会取消它。
+  // 设为 0 表示永不自动进入，开发调试时用。
+  launcher: {
+    autoStartSeconds: 10
+  },
   // 找图素材相对当前脚本的位置。以 . 开头表示相对模式，由运行时用 files.path 解析。
   // 开发时把脚本和 assets 放在设备同一目录下，打包成 APK 后两者也在一起。
   assetsRoot: "./assets",

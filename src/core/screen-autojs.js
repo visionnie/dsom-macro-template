@@ -3,6 +3,8 @@
 // 设计约束：本模块负责图片生命周期，调用方不持有未回收的 Image 对象
 // =====================================================================
 
+var errors = require("./errors-autojs.js");
+
 function sanitizeName(name) {
   return String(name || "screen").replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
@@ -34,7 +36,8 @@ function create(options) {
     }
 
     if (!granted) {
-      throw new Error("截图权限未授予");
+      // 环境问题：人没点授权，或系统没弹出来。不是用例的错。
+      throw errors.broken("截图权限未授予");
     }
     permissionGranted = true;
   }
@@ -50,7 +53,7 @@ function create(options) {
     var imageWidth = image.getWidth();
     var imageHeight = image.getHeight();
     if (imageWidth !== device.width || imageHeight !== device.height) {
-      throw new Error(
+      throw errors.broken(
         "截图尺寸与点击坐标空间不一致: 截图 " +
           imageWidth +
           "x" +
@@ -67,7 +70,7 @@ function create(options) {
 
   function ensurePermission() {
     if (!permissionGranted) {
-      throw new Error("尚未申请截图权限");
+      throw errors.broken("尚未申请截图权限");
     }
   }
 
@@ -90,6 +93,16 @@ function create(options) {
         outputDir + "/" + Date.now() + "-" + sanitizeName(name) + ".png";
       images.save(image, path, "png", 100);
       logger.info("阶段截图: " + path);
+      return path;
+    });
+  }
+
+  // 保存到调用方指定的路径。录制器需要按步号命名并落在会话目录里，
+  // saveStage 的"当前任务目录 + 时间戳"命名对它不适用。
+  function saveTo(path) {
+    return withCapture(function (image) {
+      files.ensureDir(path.substring(0, path.lastIndexOf("/") + 1));
+      images.save(image, path, "png", 100);
       return path;
     });
   }
@@ -149,7 +162,8 @@ function create(options) {
     ensurePermission();
     var template = images.read(templatePath);
     if (!template) {
-      throw new Error("模板图片读取失败: " + templatePath);
+      // 素材缺失属于环境问题：多半是没推 assets/ 或打包漏了，不是用例写错。
+      throw errors.broken("模板图片读取失败: " + templatePath);
     }
 
     try {
@@ -184,6 +198,7 @@ function create(options) {
     },
     withCapture: withCapture,
     saveStage: saveStage,
+    saveTo: saveTo,
     getRgb: getRgb,
     waitFor: waitFor,
     findTemplate: findTemplate

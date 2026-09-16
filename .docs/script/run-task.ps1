@@ -13,6 +13,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Device,
 
+    # 要跑的任务 ID。不给则用配置里的 defaultTask。
+    # 实现方式是往设备上写一个与 main.js 同级的 task.txt，由入口优先读取；
+    # 这样换任务不用改 defaultTask 再改回来，也不会把临时选择留在提交里。
+    [string]$Task,
+
     # 跑之前先强杀游戏，用于测试冷启动路径。
     [switch]$ColdStart,
 
@@ -62,20 +67,35 @@ function Get-ConfigValue {
     return $null
 }
 
-$taskId = Get-ConfigValue 'defaultTask'
+$defaultTaskId = Get-ConfigValue 'defaultTask'
 $outputRoot = Get-ConfigValue 'outputRoot'
 $packageName = Get-ConfigValue 'packageName'
 $projectId = Get-ConfigValue 'id'
 
-if (-not $taskId) { throw "未能从配置读出 defaultTask" }
+if (-not $defaultTaskId) { throw "未能从配置读出 defaultTask" }
 if (-not $projectId) { throw "未能从配置读出 project.id" }
+
+if ($Task) {
+    $taskId = $Task
+    # 任务必须已登记，否则要等推到设备上跑起来才发现拼错了。
+    $registered = (& node -e "process.stdout.write(require('$($projectRoot -replace '\\','/')/src/task-registry-autojs.js').listIds().join(','))")
+    if ($LASTEXITCODE -ne 0) { throw "无法读取任务登记表" }
+    if (($registered -split ',') -notcontains $taskId) {
+        throw "未登记的任务: $taskId（已登记: $registered）"
+    }
+}
+else {
+    $taskId = $defaultTaskId
+}
 
 # 配置里的 assetsRoot 是 ./assets，相对当前脚本解析。
 # 因此设备上脚本与素材必须放在同一目录，打包成 APK 后两者同样同级，形态一致。
 $deviceDir = "/sdcard/dsom-macro-$projectId"
 $deviceScript = "$deviceDir/main-autojs.js"
 Write-Host "任务: $taskId   设备: $Device" -ForegroundColor Cyan
-Write-Host "（要换任务，改 src/config/game-config-autojs.js 的 defaultTask）"
+if (-not $Task) {
+    Write-Host "（换任务用 -Task <任务ID>，不必改 defaultTask）"
+}
 
 # ---- 连接 ----
 & adb connect $Device | Out-Null
@@ -96,6 +116,21 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $bundle)) { throw "找不到构建产物: $bundle" }
 Invoke-Adb @('shell', "mkdir -p $deviceDir") | Out-Null
 Invoke-Adb @('push', $bundle, $deviceScript) | Out-Null
+# 菜单是第二个入口（界面），入口在没有 task.txt 时于主线程拉起它，必须与入口同级。
+# 本脚本走 task.txt 用不到菜单，但推上去能保证设备上两份始终是同一次构建。
+$menuBundle = Join-Path $projectRoot 'dist/menu-autojs.js'
+if (-not (Test-Path $menuBundle)) { throw "找不到菜单构建产物: $menuBundle" }
+Invoke-Adb @('push', $menuBundle, "$deviceDir/menu-autojs.js") | Out-Null
+
+# 任务选择通过 task.txt 传给设备侧入口。每次都显式写或删，
+# 否则上一轮 -Task 留下的文件会悄悄劫持这一轮的 defaultTask。
+if ($Task) {
+    Invoke-Adb @('shell', "echo '$taskId' > $deviceDir/task.txt") | Out-Null
+    Write-Host "已指定任务: $taskId"
+}
+else {
+    Invoke-Adb @('shell', "rm -f $deviceDir/task.txt") | Out-Null
+}
 
 if ($PushAssets) {
     # 素材与用例都是外部数据文件，改动后都需要重新推。
@@ -122,6 +157,17 @@ if ($ColdStart -and $packageName) {
 # ---- 拉起 AutoJs6 并执行 ----
 Invoke-Adb @('shell', 'am force-stop org.autojs.autojs6') | Out-Null
 Start-Sleep -Seconds 2
+
+# 上一轮失败可能在屏幕上留下没人应答的截图授权弹窗。不清掉的话，下面的轮询会在
+# T+3s 就命中它，把陈旧弹窗当成本次的点掉并判定“已授权”，而本次真正的弹窗
+# （captureAfterLaunch 下要等 launchSettleMs 之后才出现）就再没人管，任务挂到超时。
+# 实测 BACK 和点“取消”都关不掉这种孤儿弹窗，HOME 可以。
+$staleFocus = Invoke-Adb @('shell', 'dumpsys window | grep mCurrentFocus | tail -1')
+if ($staleFocus -match 'MediaProjectionPermissionActivity') {
+    Invoke-Adb @('shell', 'input', 'keyevent', 'KEYCODE_HOME') | Out-Null
+    Start-Sleep -Seconds 2
+    Write-Host "已清掉上一轮残留的截图授权弹窗"
+}
 Invoke-Adb @('shell', 'monkey', '-p', 'org.autojs.autojs6', '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
 Start-Sleep -Seconds 4
 Invoke-Adb @(
@@ -192,7 +238,10 @@ $statusColor = if ($result.status -eq 'passed') { 'Green' } else { 'Red' }
 Write-Host "结果: $($result.status)   耗时: $([math]::Round($result.durationMs / 1000, 2)) 秒" -ForegroundColor $statusColor
 foreach ($step in $result.steps) {
     $mark = if ($step.status -eq 'passed') { '通过' } else { $step.status }
-    Write-Host ("  [{0}] {1}  （尝试 {2} 次）" -f $mark, $step.name, $step.attempts)
+    # 任务型步骤有 attempts（运行时按 retryCount 重试）；JSON 用例的节点没有这个概念，
+    # 重试是靠 onFail 跳转表达的，硬印「尝试  次」会留下一个空洞。
+    $attemptSuffix = if ($null -ne $step.attempts) { "  （尝试 $($step.attempts) 次）" } else { "" }
+    Write-Host ("  [{0}] {1}{2}" -f $mark, $step.name, $attemptSuffix)
 }
 if ($result.error) {
     Write-Host ""

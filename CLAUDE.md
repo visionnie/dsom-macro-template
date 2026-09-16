@@ -10,6 +10,8 @@
 - `.docs/RULES.md`：代码、用例、分支的边界
 - `.docs/CASE-MVP.md`：**已实现的 JSON 用例格式，写用例只看这份**
 - `.docs/CASE-SCHEMA.md`：早期设计稿，未实现，勿照着写用例
+- `.docs/RESIDENT.md`：常驻调度——无人值守的入口
+- `.docs/RECORDER.md`：录制器的实现状态与实测踩到的悬浮窗坑
 - `.docs/RECORDER-RESEARCH.md`：录制器的设计来源与 MVP 边界
 - `.docs/PACKAGING.md`：打包成独立 APK 的流程与实测结论
 - `.docs/HANDOFF.md`：当前进度与下一步

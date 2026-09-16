@@ -70,12 +70,32 @@ npm run project
 
 | 内容 | 说明 |
 |---|---|
-| `main.js` | 打包后的单文件，即 `dist/main-autojs.js` |
+| `main.js` | 应用入口，即 `dist/main-autojs.js`（`"auto"` 模式，只负责分派） |
+| `menu-autojs.js` | 菜单，即 `dist/menu-autojs.js`（`"ui"` 模式），由 `main.js` 在主线程拉起；**必须与 `main.js` 同级** |
 | `assets/` | 找图素材，必须与 `main.js` 同级 |
 | `cases/` | JSON 用例，同样必须与 `main.js` 同级；`src/cases/` 不存在时跳过 |
 | `project.json` | AutoJs6 项目配置 |
 
 可选参数：`--package`、`--version-name`、`--version-code`、`--libs`、`--abis`、`--run-on-boot`。
+
+**打包后的 APK 点图标不再立即执行，而是先出菜单**（开始常驻调度 / 任务列表 /
+录制用例 / 运行记录）。菜单带倒计时，若干秒无人操作会自动进入常驻调度，
+所以无人值守仍然成立。倒计时秒数见 `config.launcher.autoStartSeconds`，
+详见 `.docs/RESIDENT.md`。
+
+**入口拆成两个文件**：`main.js` 是 `"auto"`，只负责在主线程拉起 `menu-autojs.js`（`"ui"`）。
+**不能把入口直接做成 `"ui"`**：AutoJs6 启动 UI 脚本时先 startActivity、后登记执行，
+开机自启从工作线程调用，主线程一闲脚本页就查不到执行、立即 `onDestroy`，开机自启静默失败
+（2026-09-16 真机重启复现，读源码确认，修后用模拟开机验证）。
+打包器会读每个入口的模式指令并提到产物顶部；`src/entry/` 下每个入口各打一份到 `dist/`。
+
+`--run-on-boot` 决定 `project.json` 的 `launchConfig.runOnBoot`，**默认关闭**。
+它是无人值守形态的前提（开机自启 → 授权一次 → 常驻循环），不加就打不出会自启的包。
+走 `package-apk.ps1` 时用 `-RunOnBoot` 透传；该开关与 `-SkipGenerate` 互斥，
+因为跳过生成用的是现有 `dist/project`，改不了这个字段。
+
+**改了这个开关必须重新打包，不能只重装。** 它写在 `project.json` 里，
+在手机上点「打包应用」的那一刻被读进 APK。
 
 ## 素材与用例路径必须是相对路径
 
@@ -117,6 +137,15 @@ AutoJs6 打包界面会用自己的 schema 回写 `project.json`。以下字段�
     "ignore": ["build"]
 }
 ```
+
+### permissions 必须含 REORDER_TASKS
+
+运行时用 `moveTaskToFront` 把脚本页切回前台（申请截图权限前、录制停止后），
+它要求 `android.permission.REORDER_TASKS`。**缺了不影响开发路径**——宿主 AutoJs6 自带这个权限——
+所以只在打包后暴露：录制停止后复核页出不来，常驻与所有 `captureAfterLaunch` 任务在后台申请截图而超时。
+它是 normal 级权限，声明即在安装时自动授予。生成器已默认带上（2026-09-15 实测补上）。
+
+改了 permissions 同样**必须重新打包**，只重装旧 APK 没用。
 
 ### libs 是重点
 
@@ -165,8 +194,13 @@ AutoJs6 内部 5 秒硬超时的边缘。修正后点图标启动，9 步全绿�
 
 ## 尚未解决
 
-**截图授权每次仍需确认一次。** 打包后的 APK 同样要申请 MediaProjection，
-Android 10 不允许记住该授权。当前靠人工或 adb 点一次。
+**截图授权每次启动仍需确认一次。** 打包后的 APK 同样要申请 MediaProjection，
+Android 10 不允许记住该授权。
 
-无人值守要真正成立，方向是让一个常驻脚本申请一次权限后**在进程内循环执行**，
-而不是每次重新拉起脚本。这一点连同 `runOnBoot` 需要一并设计和实测。
+但它是**按会话**的：常驻调度已经把「每跑一条用例授权一次」变成「每次启动授权一次」，
+实机验证 4 分钟 9 轮只授权了一次。见 `.docs/RESIDENT.md`。
+
+**开机自启已真机验证（2026-09-16）**：`-RunOnBoot` 包重启后约 16 秒进菜单，倒计时进常驻，
+弹出截图授权；`REORDER_TASKS`、悬浮窗、开机广播权限重启后都保留。走通之前踩了两个坑：
+测试收尾 `am force-stop` 过的 APK 开机收不到广播；入口是 `"ui"` 时脚本页会立即 `onDestroy`。
+云机无法通过 adb 重启（root 也不行），每次验证都要人在控制台点。

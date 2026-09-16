@@ -29,10 +29,11 @@
 ## 当前阶段
 
 通用运行时已被真实用例实机打磨六轮，打包成独立 APK 的链路已打通。
-JSON 用例引擎（`case-runner`）MVP 可用，已随 rxfs 的 BOSS 用例验证并回流。
+JSON 用例引擎（`case-runner`）可用，支持跨分辨率换算与有界循环。
+常驻调度（`resident-runner`）已实机验证：一次授权、循环内按调度表触发用例、到点主动退出。
 
-下一步是「常驻脚本 + 进程内定时循环」，解决截图授权每次要人工点的问题——
-这是无人值守的最后一环。详见 `.docs/HANDOFF.md`。
+下一步是**开机自启实测**（需人工在云机控制台重启）与**录制器**。
+详见 `.docs/HANDOFF.md`。
 
 ## 上手必读
 
@@ -40,6 +41,8 @@ JSON 用例引擎（`case-runner`）MVP 可用，已随 rxfs 的 BOSS 用例验�
 |---|---|
 | `.docs/CASE-MVP.md` | **写或改 JSON 用例前必读**，这是唯一实现了的用例格式 |
 | `.docs/CASE-SCHEMA.md` | 设计稿，**未实现**，别照着写用例 |
+| `.docs/RESIDENT.md` | 常驻调度，无人值守的入口 |
+| `.docs/RECORDER.md` | 录制器的实现与实测踩到的悬浮窗坑 |
 | `.docs/PACKAGING.md` | 打包成 APK，含实测踩过的坑 |
 | `.docs/RECORDER-RESEARCH.md` | 录制器的设计来源与 MVP 边界 |
 | `.docs/RULES.md` | 代码、用例、分支的硬边界 |

@@ -65,6 +65,27 @@ function indent(content, spaces) {
     .join("\n");
 }
 
+// 取入口文件开头的模式指令。只认 "auto" 与 "ui"——AutoJs6 就这两种，
+// 写错会静默按 auto 跑，UI 界面根本不出来，所以宁可在这里直接拒绝。
+const VALID_ENTRY_DIRECTIVES = ["auto", "ui"];
+
+function readEntryDirective(entryPath) {
+  const source = fs.readFileSync(entryPath, "utf8");
+  const withoutComments = source.replace(/^\s*(\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)+/, "");
+  const match = /^\s*(["'])([a-z]+)\1\s*;/.exec(withoutComments);
+  if (!match) {
+    return "auto";
+  }
+  const directive = match[2];
+  if (VALID_ENTRY_DIRECTIVES.indexOf(directive) === -1) {
+    throw new Error(
+      "入口的模式指令无法识别: \"" + directive + "\"，只支持 " +
+        VALID_ENTRY_DIRECTIVES.join(" / ")
+    );
+  }
+  return directive;
+}
+
 function buildBundle(entryPath, outputPath) {
   const modules = new Map();
   const staticRequirePattern = /\brequire\s*\(\s*(["'])([^"']+)\1\s*\)/g;
@@ -106,9 +127,15 @@ function buildBundle(entryPath, outputPath) {
     );
   }
 
+  // AutoJs6 的模式指令（"auto" / "ui"）必须在产物的最顶部才生效，
+  // 而入口文件的内容会被包进模块函数里，指令在那儿就失效了。
+  // 所以按入口文件声明的指令提到顶部——入口是唯一事实来源，
+  // 改成 UI 模式只需要改入口，不用记得同时改这个脚本。
+  const entryDirective = readEntryDirective(entryPath);
+
   const bundle = [
     "// 此文件由 .docs/script/build-autojs-bundles.js 生成，请勿直接编辑。",
-    '"auto";',
+    JSON.stringify(entryDirective) + ";",
     "",
     "(function (modules) {",
     "  var cache = {};",
@@ -136,19 +163,34 @@ function buildBundle(entryPath, outputPath) {
   return modules.size;
 }
 
-const entryPath = path.resolve(
-  projectRoot,
-  readArgument("--entry", "src/entry/main-autojs.js")
-);
-const outputPath = path.resolve(
-  projectRoot,
-  readArgument("--output", "dist/main-autojs.js")
-);
-
-if (!fs.existsSync(entryPath)) {
-  throw new Error("入口文件不存在: " + entryPath);
+// 入口不止一个：main（无界面，负责分派）与 menu（界面）。为什么拆成两个见 src/entry/main-autojs.js。
+// 不给 --entry 时把 src/entry/ 下每个入口各打一份到 dist/ 同名文件，新增入口不用改这里；
+// 给了 --entry 则只打那一个。
+const explicitEntry = readArgument("--entry", null);
+const jobs = [];
+if (explicitEntry) {
+  jobs.push({
+    entry: path.resolve(projectRoot, explicitEntry),
+    output: path.resolve(
+      projectRoot,
+      readArgument("--output", path.join("dist", path.basename(explicitEntry)))
+    )
+  });
+} else {
+  const entryDir = path.join(sourceRoot, "entry");
+  const names = fs.readdirSync(entryDir).filter((name) => name.endsWith(".js")).sort();
+  for (const name of names) {
+    jobs.push({ entry: path.join(entryDir, name), output: path.join(projectRoot, "dist", name) });
+  }
 }
 
-const moduleCount = buildBundle(entryPath, outputPath);
-console.log("已生成: " + path.relative(projectRoot, outputPath));
-console.log("已打包模块: " + moduleCount);
+for (const job of jobs) {
+  if (!fs.existsSync(job.entry)) {
+    throw new Error("入口文件不存在: " + job.entry);
+  }
+  const moduleCount = buildBundle(job.entry, job.output);
+  console.log(
+    "已生成: " + path.relative(projectRoot, job.output) +
+      "（" + readEntryDirective(job.entry) + " 模式，" + moduleCount + " 个模块）"
+  );
+}
