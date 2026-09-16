@@ -247,12 +247,34 @@ function run(context, options) {
     schedule.maxConsecutiveFailures || DEFAULT_MAX_CONSECUTIVE_FAILURES;
 
   // 登记表里必须真的有这些任务，否则等到点才发现调不动。
+  //
+  // 但「取不到」分两种，不能一视同仁：
+  //   - 任务没登记：调度表写错了，是代码问题，直接抛，让人马上看见
+  //   - broken：任务本身是设备上的数据（例如录制用例的会话被删了）。
+  //     为这一条掀翻整个常驻，等于让一条陈旧调度项赔上整夜的无人值守。
+  //     跳过它、留下警告，其余照跑。
+  var usableEntries = [];
   for (var i = 0; i < schedule.entries.length; i++) {
-    registry.get(schedule.entries[i].taskId);
-    var requires = resolveRequires(schedule.entries[i], registry);
-    for (var r = 0; r < requires.length; r++) {
-      registry.get(requires[r]);
+    var candidate = schedule.entries[i];
+    try {
+      registry.get(candidate.taskId);
+      var requires = resolveRequires(candidate, registry);
+      for (var r = 0; r < requires.length; r++) {
+        registry.get(requires[r]);
+      }
+      usableEntries.push(candidate);
+    } catch (resolveError) {
+      if (!errors.isBroken(resolveError)) {
+        throw resolveError;
+      }
+      logger.warn(
+        "调度项 [" + candidate.id + "] 本轮跳过: " +
+          (resolveError.message || resolveError)
+      );
     }
+  }
+  if (usableEntries.length === 0) {
+    throw errors.broken("调度表里没有一条可执行的调度项，常驻不启动");
   }
 
   var startedAt = Date.now();
@@ -263,7 +285,7 @@ function run(context, options) {
 
   logger.info(
     "常驻调度启动：" +
-      schedule.entries.length +
+      usableEntries.length +
       " 条调度项，每 " +
       Math.round(tickIntervalMs / 1000) +
       " 秒检查一次，最长运行 " +
@@ -286,8 +308,8 @@ function run(context, options) {
     var dateKey = dateKeyOf(now);
     var summary = loadSummary(config, dateKey);
 
-    for (var e = 0; e < schedule.entries.length; e++) {
-      var entry = schedule.entries[e];
+    for (var e = 0; e < usableEntries.length; e++) {
+      var entry = usableEntries[e];
       var state = entryStateOf(summary, entry.id);
       var decision = decide(entry, state, now, tickStartedAt);
       if (!decision.due) {

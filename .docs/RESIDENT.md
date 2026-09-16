@@ -26,7 +26,7 @@
 设为 `0` 表示永不自动进入，开发调试时用。倒计时**只在第一次显示菜单时**触发，
 任务跑完回到菜单不会再倒计时。
 
-菜单四项：开始常驻调度 / 任务列表 / 录制用例 / 运行记录。
+菜单五项：开始常驻调度 / 常驻调度表 / 任务列表 / 录制用例 / 运行记录。
 实现在 `src/core/launcher-autojs.js`。入口拆成两个：`src/entry/main-autojs.js` 是 `"auto"` 模式，
 只负责分派（有 `task.txt` 直接跑任务，否则在主线程拉起菜单）；菜单是 `src/entry/menu-autojs.js`（`"ui"`）。
 **别把入口改回 `"ui"`**——那样开机自启会静默失败，原因见 `main-autojs.js` 文件头。
@@ -49,8 +49,10 @@
 | `src/entry/main-autojs.js` | 无界面入口，分派到任务或菜单 |
 | `src/core/launcher-autojs.js` | 菜单界面与倒计时。**不含任何游戏语义** |
 | `src/core/resident-autojs.js` | 循环、判定、结果累积。**不含任何游戏语义** |
-| `src/config/schedule-autojs.js` | 跑什么、什么时候跑。游戏相关的编排都在这里 |
-| `src/tasks/resident-runner-autojs.js` | 薄入口，把上面两个接起来 |
+| `src/core/schedule-store-autojs.js` | 设备侧调度表增补层：读写、与基表合并 |
+| `src/core/recorded-task-autojs.js` | 把 `recorded:<会话 id>` 解析成可执行任务 |
+| `src/config/schedule-autojs.js` | 基表：跑什么、什么时候跑。游戏相关的编排都在这里 |
+| `src/tasks/resident-runner-autojs.js` | 薄入口，把上面几个接起来 |
 
 界面上的任务必须跑在工作线程（`threads.start`）：任务里全是 `sleep` 和阻塞轮询，
 放在 UI 线程会直接卡死界面，连"正在运行"几个字都刷不出来。
@@ -80,6 +82,59 @@ module.exports = {
 
 三个上限是硬要求，不是建议。`RULES.md` 要求所有业务循环有明确上限——
 一个整夜空转、还不停乱点的脚本比不跑更糟。
+
+`npm run check` 会静态校验这张表：字段规则复用设备侧同一份 `validateSchedule`，
+并检查 `taskId` 与 `requires` 都已登记。以前这些要等常驻起来才暴露，
+而常驻是开机自启后无人值守跑的，最坏情况是整夜什么都没跑。
+
+## 设备侧增补层：让录制出来的用例进调度
+
+**实际用的调度表 = 代码里的基表 + 设备上的增补层。**
+
+基表是代码，改它要回 PC 改、检查、打包、安装。而录制器的产物是设备上现生成的——
+人在设备前录完一条用例，想让它到点自己跑，不该为此跑一趟 PC。
+
+```text
+<outputRoot>/schedule/overlay.json
+```
+
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-09-16T12:00:00.000Z",
+  "entries": [
+    { "id": "recorded-daily", "taskId": "recorded:20260916153000",
+      "maxRunsPerDay": 1, "minIntervalMs": 3600000,
+      "window": { "from": "12:00", "to": "24:00" }, "requires": ["login-rxfs"] }
+  ]
+}
+```
+
+字段与基表完全一样，合并后仍然交给 `validateSchedule` 校验——规则只有一套。
+**同 id 时增补层覆盖基表项**，所以不重新打包也能临时改次数和时间窗。
+
+增补层是纯数据，坏了不能掀翻常驻：解析失败就当空表继续跑基表，
+并在日志里写明原因。否则人只会看到「加进去的那条怎么不跑」，查不到根因。
+
+### `recorded:` 前缀
+
+录制用例是**设备上的数据**，进不了静态的任务登记表，而调度表只认 `taskId`。
+约定 `taskId: "recorded:<会话 id>"`：取任务时由 `recorded-task-autojs.js`
+按 `<outputRoot>/recordings/<会话 id>/case.json` 现场造一个任务对象出来，
+前置开关（先启动游戏、后申请截图权限）与手动回放走的是同一份代码。
+
+会话目录或 `case.json` 不存在时抛 `broken` 而不是 `failed`：
+录制被删掉是环境问题，不该算进用例通过率。
+
+### 界面
+
+菜单多一项「常驻调度表」：摊开合并后的结果，标出哪些是内置、哪些是设备上加的，
+只有后者能在设备上移除（基表打进了包里，设备上删不掉，也不该假装能删）。
+移除走两步确认，**不用 `dialogs.confirm`**——那是阻塞调用，在 UI 线程里会让整个脚本退出。
+
+录制复核页多一个「加入常驻调度」：先生成 `case.json`，再填次数、最小间隔、
+时间窗和前置任务。**落盘前先在内存里合并出完整调度表跑一遍校验**，
+通过了才写——增补层是无人值守链路的输入，不能让一条写坏的调度项等到半夜才炸。
 
 ## 前置依赖：为什么是「失败后才补跑」
 

@@ -88,12 +88,20 @@ function getErrorDetail(error) {
   return stack ? message + "\n" + stack : message;
 }
 
+// 任务 id 会被当成目录名用。登记表里的 id 都是小写字母数字连字符，本来无所谓，
+// 但现造的任务不一定——录制用例是 recorded:<会话 id>，冒号在 Windows 上根本
+// 建不了文件，run-task.ps1 的 adb pull 会取不回结果，而设备侧不会报任何错。
+// 只清洗路径这一段，任务 id 本身保持原样，日志和 result.json 里仍是它真实的 id。
+function toPathSegment(taskId) {
+  return String(taskId).replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
 function run(config, task) {
   validateConfig(config);
 
   var startedAt = new Date();
   var runId = startedAt.getTime();
-  var outputDir = config.outputRoot + "/" + task.id + "/" + runId;
+  var outputDir = config.outputRoot + "/" + toPathSegment(task.id) + "/" + runId;
   var logger = loggerModule.create({ outputDir: outputDir });
   var screen = screenModule.create({
     logger: logger,

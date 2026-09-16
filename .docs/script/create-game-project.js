@@ -48,13 +48,18 @@ const genericPaths = [
   "src/core/foreground-autojs.js",
   "src/core/launcher-autojs.js",
   "src/core/logger-autojs.js",
+  "src/core/recorded-task-autojs.js",
   "src/core/recorder-autojs.js",
   "src/core/ocr-autojs.js",
   "src/core/resident-autojs.js",
   "src/core/runtime-autojs.js",
+  "src/core/schedule-store-autojs.js",
   "src/core/screen-autojs.js",
   "src/core/workflow-autojs.js",
   "src/entry/main-autojs.js",
+  // 入口拆成 auto + ui 两个文件后漏了这一个，生成出来的新项目会没有菜单界面。
+  // 别删：main-autojs.js 只负责分派，菜单在这里。
+  "src/entry/menu-autojs.js",
   "src/tasks/_task-template-autojs.js",
   "src/tasks/environment-check-autojs.js",
   "src/tasks/launch-game-check-autojs.js",

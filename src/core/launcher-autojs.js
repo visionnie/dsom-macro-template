@@ -45,6 +45,7 @@ function renderMenu(config, state) {
       '    <vertical padding="16">',
       '      <button id="residentButton" text="开始常驻调度" style="Widget.AppCompat.Button.Colored" h="52"/>',
       '      <text id="countdownText" text="" textSize="13sp" textColor="#c62828" marginTop="6" gravity="center"/>',
+      '      <button id="scheduleButton" text="常驻调度表" h="52" marginTop="12"/>',
       '      <button id="taskButton" text="任务列表" h="52" marginTop="12"/>',
       '      <button id="recordButton" text="录制用例" h="52" marginTop="12"/>',
       '      <button id="recordsButton" text="运行记录" h="52" marginTop="12"/>',
@@ -88,6 +89,10 @@ function renderMenu(config, state) {
   ui.residentButton.on("click", function () {
     stopCountdown("");
     runTaskInBackground(config, state, state.autoStartTask);
+  });
+  ui.scheduleButton.on("click", function () {
+    stopCountdown("");
+    renderScheduleList(config, state, "");
   });
   ui.taskButton.on("click", function () {
     stopCountdown("");
@@ -469,6 +474,9 @@ function renderRecordingReview(config, state, session, message) {
           '    <button id="generateButton" text="生成用例" layout_weight="1"/>',
           '    <button id="replayButton" text="生成并回放" style="Widget.AppCompat.Button.Colored" layout_weight="1"/>',
           "  </horizontal>",
+          '  <horizontal padding="8 0 8 8">',
+          '    <button id="scheduleAddButton" text="加入常驻调度" layout_weight="1"/>',
+          "  </horizontal>",
           "</vertical>"
         ])
     )
@@ -503,6 +511,17 @@ function renderRecordingReview(config, state, session, message) {
     }
     runTaskInBackground(config, state, createRecordedCaseTask(session, casePath));
   });
+  // 先生成再进编辑页：调度项指向的是 case.json，没生成就加进去，
+  // 到点只会拿到一条 broken，而那时没人在设备前。
+  ui.scheduleAddButton.on("click", function () {
+    try {
+      writeRecordedCase(session);
+    } catch (error) {
+      renderRecordingReview(config, state, session, "生成失败: " + (error.message || error));
+      return;
+    }
+    renderScheduleEditor(config, state, session);
+  });
 }
 
 function describeRecordedNode(node, shot) {
@@ -532,20 +551,248 @@ function writeRecordedCase(session) {
 }
 
 // 回放用的临时任务，不进任务登记表：录制用例是设备上现生成的数据，不是仓库里的代码。
+// 造法与常驻调度取 recorded:<会话 id> 时**必须是同一份**，否则手动回放通过、
+// 到点自己跑却换了套前置开关，差异只会在无人值守的夜里暴露。
 function createRecordedCaseTask(session, casePath) {
-  var caseRunner = require("./case/case-runner-autojs.js");
-  return {
-    id: "recorded-case",
-    name: "回放录制 " + session.id,
-    // 与业务用例一致：先确保游戏在前台，再申请截图权限（有的盒子启动时检测录屏）。
-    launchGame: true,
-    requiresCapture: true,
-    captureAfterLaunch: true,
-    run: function (taskContext) {
-      var caseData = caseRunner.loadCase(casePath);
-      return caseRunner.runCase(taskContext, caseData, { caseDir: session.dir });
+  return require("./recorded-task-autojs.js").createTask(session.id, session.dir, casePath);
+}
+
+// ---- 常驻调度表 ----
+// 调度表 = 代码里的基表（src/config/schedule-autojs.js）+ 设备上的增补层。
+// 这一页把合并结果摊开给人看，并且只允许删增补层里的那些：
+// 基表是打进包里的代码，设备上删不掉，也不该假装能删。
+function renderScheduleList(config, state, message) {
+  var scheduleStore = require("./schedule-store-autojs.js");
+  var baseSchedule = require("../config/schedule-autojs.js");
+  var overlay = scheduleStore.load(config);
+  var merged = scheduleStore.merge(baseSchedule, overlay);
+
+  var rows = [];
+  for (var i = 0; i < merged.entries.length; i++) {
+    var entry = merged.entries[i];
+    var fromOverlay = entry.source === "overlay";
+    rows.push({
+      entryId: entry.id,
+      removable: fromOverlay,
+      title: entry.id + "　" + (fromOverlay ? "设备上添加" : "内置"),
+      titleColor: fromOverlay ? "#2e7d32" : "#212121",
+      subtitle: describeScheduleEntry(entry)
+    });
+  }
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#fafafa" h="*">']
+        .concat(pageHeader("常驻调度表"))
+        .concat([
+          '  <text id="scheduleSummary" text="" textSize="13sp" textColor="#555555" padding="16 12"/>',
+          '  <list id="scheduleList" layout_weight="1">',
+          '    <vertical padding="16 12" bg="#ffffff" w="*">',
+          '      <text text="{{title}}" textSize="15sp" textColor="{{titleColor}}"/>',
+          '      <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
+          "    </vertical>",
+          "  </list>",
+          '  <text id="scheduleHint" text="" textSize="12sp" textColor="#666666" padding="16 10"/>',
+          "</vertical>"
+        ])
+    )
+  );
+
+  var overlayNote = overlay.recoveredFrom ? "\n增补层读取失败，已按空表处理: " + overlay.recoveredFrom : "";
+  ui.scheduleSummary.setText(
+    (message ? message + "\n" : "") +
+      "共 " + rows.length + " 条，其中设备上添加 " + (overlay.entries || []).length + " 条" +
+      overlayNote
+  );
+  ui.scheduleList.setDataSource(rows);
+  ui.scheduleHint.setText("点「设备上添加」的一项可以移除；内置项要回 PC 改 schedule 配置");
+  ui.backButton.on("click", function () {
+    renderMenu(config, state);
+  });
+
+  // 两步确认，不用 dialogs.confirm：那个是阻塞调用，而这里是 UI 线程，
+  // 一 sleep 整个脚本就退出（RECORDER.md 第 4 条坑）。
+  var pendingRemoveId = null;
+  ui.scheduleList.on("item_click", function (item) {
+    if (!item.removable) {
+      ui.scheduleHint.setText("[" + item.entryId + "] 是内置调度项，要改请回 PC 改 src/config/schedule-autojs.js");
+      pendingRemoveId = null;
+      return;
     }
+    if (pendingRemoveId !== item.entryId) {
+      pendingRemoveId = item.entryId;
+      ui.scheduleHint.setText("再点一次 [" + item.entryId + "] 从调度表移除");
+      return;
+    }
+    var result = scheduleStore.removeEntry(config, item.entryId);
+    renderScheduleList(
+      config,
+      state,
+      result.removed ? "已移除 [" + item.entryId + "]" : "没找到 [" + item.entryId + "]"
+    );
+  });
+}
+
+function describeScheduleEntry(entry) {
+  var parts = [entry.taskId];
+  parts.push("每天最多 " + (entry.maxRunsPerDay != null ? entry.maxRunsPerDay : 1) + " 次");
+  if (entry.minIntervalMs) {
+    parts.push("最小间隔 " + Math.round(entry.minIntervalMs / 60000) + " 分钟");
+  }
+  if (entry.window) {
+    parts.push("时间窗 " + entry.window.from + "-" + entry.window.to);
+  }
+  if (entry.requires && entry.requires.length > 0) {
+    parts.push("前置 " + entry.requires.join("/"));
+  }
+  return parts.join("　");
+}
+
+// ---- 把录制用例加进常驻调度 ----
+// 录制用例是设备上的数据，进不了任务登记表，所以调度项的 taskId 写成
+// recorded:<会话 id>，常驻取任务时现场按会话目录造出来（recorded-task-autojs.js）。
+function renderScheduleEditor(config, state, session) {
+  var recordedTask = require("./recorded-task-autojs.js");
+  var defaultEntryId = "recorded-" + session.id;
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#fafafa" h="*">']
+        .concat(pageHeader("加入常驻调度"))
+        .concat([
+          // 必须能滚动：屏幕方向跟随前台应用，游戏留下横屏时保存按钮会被挤出屏幕。
+          '  <ScrollView layout_weight="1">',
+          '    <vertical padding="16" bg="#ffffff">',
+          '      <text text="调度项 ID（结果汇总按它分组）" textSize="12sp" textColor="#666666"/>',
+          '      <input id="entryIdInput" text="' + defaultEntryId + '" textSize="15sp"/>',
+          '      <text text="每天最多跑几次" textSize="12sp" textColor="#666666" marginTop="12"/>',
+          '      <input id="maxRunsInput" text="1" inputType="number" textSize="15sp"/>',
+          '      <text text="两次之间最小间隔（分钟，0 表示不限）" textSize="12sp" textColor="#666666" marginTop="12"/>',
+          '      <input id="intervalInput" text="60" inputType="number" textSize="15sp"/>',
+          '      <text text="时间窗（HH:MM，两个都留空表示全天；支持跨零点）" textSize="12sp" textColor="#666666" marginTop="12"/>',
+          "      <horizontal>",
+          '        <input id="windowFromInput" hint="开始 如 12:00" textSize="15sp" layout_weight="1"/>',
+          '        <input id="windowToInput" hint="结束 如 24:00" textSize="15sp" layout_weight="1"/>',
+          "      </horizontal>",
+          '      <text text="前置任务 ID（逗号分隔，可留空）。失败后才补跑，不是每次都先跑" textSize="12sp" textColor="#666666" marginTop="12"/>',
+          '      <input id="requiresInput" hint="如 login-rxfs" textSize="15sp"/>',
+          '      <text id="editorHint" text="" textSize="12sp" textColor="#c62828" marginTop="12"/>',
+          "    </vertical>",
+          "  </ScrollView>",
+          '  <horizontal padding="8">',
+          '    <button id="saveScheduleButton" text="保存到调度表" style="Widget.AppCompat.Button.Colored" layout_weight="1"/>',
+          "  </horizontal>",
+          "</vertical>"
+        ])
+    )
+  );
+
+  ui.backButton.on("click", function () {
+    renderRecordingReview(config, state, session, "");
+  });
+  ui.saveScheduleButton.on("click", function () {
+    var entry;
+    try {
+      entry = buildScheduleEntryFromForm(recordedTask.taskIdOf(session.id));
+      saveScheduleEntry(config, entry);
+    } catch (error) {
+      ui.editorHint.setText(String(error.message || error));
+      return;
+    }
+    renderScheduleList(config, state, "已加入 [" + entry.id + "]，常驻下一轮生效");
+  });
+}
+
+function textOf(view) {
+  return String(view.getText()).trim();
+}
+
+function parseCount(text, label, minimum) {
+  if (!/^[0-9]+$/.test(text)) {
+    throw new Error(label + "必须是整数，实际: " + (text || "(空)"));
+  }
+  var value = parseInt(text, 10);
+  if (value < minimum) {
+    throw new Error(label + "不能小于 " + minimum);
+  }
+  return value;
+}
+
+function buildScheduleEntryFromForm(taskId) {
+  var entryId = textOf(ui.entryIdInput);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(entryId)) {
+    throw new Error("调度项 ID 只能是小写字母、数字和连字符");
+  }
+
+  var entry = {
+    id: entryId,
+    taskId: taskId,
+    maxRunsPerDay: parseCount(textOf(ui.maxRunsInput), "每天最多次数", 1)
   };
+
+  var minutes = parseCount(textOf(ui.intervalInput), "最小间隔", 0);
+  if (minutes > 0) {
+    entry.minIntervalMs = minutes * 60000;
+  }
+
+  var from = textOf(ui.windowFromInput);
+  var to = textOf(ui.windowToInput);
+  if (from || to) {
+    if (!from || !to) {
+      throw new Error("时间窗要么两个都填，要么都留空");
+    }
+    // 交给调度器自己的解析器校验，格式规则只有一套。
+    var resident = require("./resident-autojs.js");
+    resident.parseHhMm(from, "时间窗开始");
+    resident.parseHhMm(to, "时间窗结束");
+    entry.window = { from: from, to: to };
+  }
+
+  var requiresText = textOf(ui.requiresInput);
+  if (requiresText) {
+    var registry = require("../task-registry-autojs.js");
+    var requires = [];
+    var parts = requiresText.split(",");
+    for (var i = 0; i < parts.length; i++) {
+      var id = parts[i].trim();
+      if (!id) continue;
+      // 现在就查，不然要等到点触发、前置补不上才发现拼错了。
+      registry.get(id);
+      requires.push(id);
+    }
+    if (requires.length > 0) {
+      entry.requires = requires;
+    }
+  }
+
+  return entry;
+}
+
+// 先在内存里合并出完整调度表跑一遍校验，通过了才落盘——
+// 增补层是无人值守链路的输入，不能让一条写坏的调度项等到半夜才炸。
+function saveScheduleEntry(config, entry) {
+  var scheduleStore = require("./schedule-store-autojs.js");
+  var resident = require("./resident-autojs.js");
+  var baseSchedule = require("../config/schedule-autojs.js");
+
+  var overlay = scheduleStore.load(config);
+  var candidate = { version: scheduleStore.OVERLAY_VERSION, entries: [] };
+  var existingEntries = overlay.entries || [];
+  var replaced = false;
+  for (var i = 0; i < existingEntries.length; i++) {
+    if (existingEntries[i].id === entry.id) {
+      candidate.entries.push(entry);
+      replaced = true;
+    } else {
+      candidate.entries.push(existingEntries[i]);
+    }
+  }
+  if (!replaced) {
+    candidate.entries.push(entry);
+  }
+
+  resident.validateSchedule(scheduleStore.merge(baseSchedule, candidate));
+  scheduleStore.save(config, candidate);
 }
 
 // ---- 框选锚点 ----
