@@ -9,6 +9,9 @@
 // =====================================================================
 
 var BROKEN_KIND = "broken";
+// 人主动按了暂停页上的「终止」。既不是业务失败也不是环境问题，
+// 混进任何一边都会污染统计——报告里得看得出「这次是人自己叫停的」。
+var CANCELLED_KIND = "cancelled";
 
 // 造一个已标记为环境问题的错误。
 function broken(message) {
@@ -29,15 +32,31 @@ function isBroken(error) {
   return !!(error && error.kind === BROKEN_KIND);
 }
 
+// 造一个「人主动终止」的错误。由 run-control 的检查点抛出。
+function cancelled(message) {
+  var error = new Error(message);
+  error.kind = CANCELLED_KIND;
+  return error;
+}
+
+function isCancelled(error) {
+  return !!(error && error.kind === CANCELLED_KIND);
+}
+
 // 供运行时把异常翻译成 result.status。
+// 顺序有讲究：cancelled 要先判，它不该被算成 failed。
 function statusOf(error) {
+  if (isCancelled(error)) return CANCELLED_KIND;
   return isBroken(error) ? BROKEN_KIND : "failed";
 }
 
 module.exports = {
   BROKEN_KIND: BROKEN_KIND,
+  CANCELLED_KIND: CANCELLED_KIND,
   broken: broken,
   markBroken: markBroken,
   isBroken: isBroken,
+  cancelled: cancelled,
+  isCancelled: isCancelled,
   statusOf: statusOf
 };

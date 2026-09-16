@@ -10,6 +10,7 @@
 // =====================================================================
 
 var errors = require("../errors-autojs.js");
+var control = require("../run-control-autojs.js");
 var geometry = require("./case-geometry-autojs.js");
 
 // 用例文档的身份是 (model, schemaVersion) 这一对，不是单独的 schemaVersion。
@@ -298,9 +299,23 @@ function runCase(context, caseData, options) {
       continue;
     }
 
+    // 节点边界的暂停/终止检查点。轮询里还有一层（actions.waitUntil），
+    // 那层负责让长时间找图也能及时响应。
+    control.checkpoint(context.logger);
+
     context.logger.info(
       "节点 [" + node.id + "] " + node.name + " (" + node.type + ")"
     );
+    // 进度上报给界面：跑到第几步、这一步叫什么。没有界面时是个空实现。
+    if (context.progress) {
+      context.progress.report({
+        index: results.length + 1,
+        total: nodes.length,
+        id: node.id,
+        name: node.name,
+        type: node.type
+      });
+    }
 
     var startedAt = Date.now();
     var target;
@@ -380,6 +395,9 @@ function waitForOrientation(context, caseData) {
 
   var deadline = Date.now() + waitMs;
   while (!matched()) {
+    // 方向等待默认 20 秒。没有检查点的话，这段时间里按暂停/终止完全没反应，
+    // 而它恰好是最容易让人想中止的一段（游戏没起来时就卡在这儿）。
+    control.checkpoint(context.logger);
     if (Date.now() >= deadline) {
       // 方向不对是环境/时序问题（游戏没起来或没转屏），不是用例写错，算 broken。
       throw errors.broken(

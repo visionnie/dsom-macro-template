@@ -4,6 +4,10 @@
 // =====================================================================
 
 var errors = require("./errors-autojs.js");
+// 截图授权提到了会话级：screen 模块是每跑一个任务新建一次的，
+// 授权状态不能跟着它走，否则每个任务都要人重新点一次（见 capture-session 文件头）。
+var captureSession = require("./capture-session-autojs.js");
+var control = require("./run-control-autojs.js");
 
 function sanitizeName(name) {
   return String(name || "screen").replace(/[^a-zA-Z0-9._-]+/g, "-");
@@ -13,33 +17,10 @@ function create(options) {
   var logger = options.logger;
   var outputDir = options.outputDir;
   var captureConfig = options.capture || {};
-  var permissionGranted = false;
   var captureSpaceChecked = false;
 
   function requestPermission() {
-    if (permissionGranted) {
-      return;
-    }
-
-    logger.info("申请 MediaProjection 截图权限");
-
-    var granted;
-    if (captureConfig.width && captureConfig.height) {
-      granted = requestScreenCapture(captureConfig.width, captureConfig.height);
-    } else if (typeof captureConfig.landscape === "boolean") {
-      // 兼容旧配置，默认不要用。在强制横屏的设备上传 true 会拿到竖屏画布，
-      // 横屏画面被等比缩小成上下加黑边的窄带（已在 720x1280 横屏云机上复现）。
-      granted = requestScreenCapture(captureConfig.landscape);
-    } else {
-      // 默认不传参，由 AutoJs6 按当前屏幕方向建立画布，截图尺寸与点击坐标空间一致。
-      granted = requestScreenCapture();
-    }
-
-    if (!granted) {
-      // 环境问题：人没点授权，或系统没弹出来。不是用例的错。
-      throw errors.broken("截图权限未授予");
-    }
-    permissionGranted = true;
+    captureSession.request(logger, captureConfig);
   }
 
   // 截图空间必须与点击坐标空间一致，否则找图得到的坐标直接拿去点击会系统性偏移，
@@ -53,6 +34,14 @@ function create(options) {
     var imageWidth = image.getWidth();
     var imageHeight = image.getHeight();
     if (imageWidth !== device.width || imageHeight !== device.height) {
+      // 授权是会话级复用的，画布在授权那一刻按当时的屏幕方向建立。
+      // 如果之后屏幕转了向（例如授权时竖屏、游戏起来后转横屏），画布就对不上了。
+      // 继续用只会每一步都点偏，而且是静默的——所以把会话作废，宁可下次多弹一次窗。
+      captureSession.invalidate(
+        "截图画布 " + imageWidth + "x" + imageHeight +
+          " 与当前屏幕 " + device.width + "x" + device.height + " 不一致",
+        logger
+      );
       throw errors.broken(
         "截图尺寸与点击坐标空间不一致: 截图 " +
           imageWidth +
@@ -62,14 +51,14 @@ function create(options) {
           device.width +
           "x" +
           device.height +
-          "。请检查 config 的 capture 配置，默认应留空由 AutoJs6 自行决定"
+          "。多为授权后屏幕转向所致，已作废截图会话，下次运行会重新申请"
       );
     }
     logger.info("截图坐标空间一致: " + imageWidth + "x" + imageHeight);
   }
 
   function ensurePermission() {
-    if (!permissionGranted) {
+    if (!captureSession.isGranted()) {
       throw errors.broken("尚未申请截图权限");
     }
   }
@@ -121,6 +110,7 @@ function create(options) {
     var lastDetail = "";
 
     while (Date.now() <= deadline) {
+      control.checkpoint(logger);
       var matched = withCapture(function (image) {
         var result = predicate(image);
         if (result && typeof result === "object") {
@@ -194,7 +184,7 @@ function create(options) {
   return {
     requestPermission: requestPermission,
     hasPermission: function () {
-      return permissionGranted;
+      return captureSession.isGranted();
     },
     withCapture: withCapture,
     saveStage: saveStage,

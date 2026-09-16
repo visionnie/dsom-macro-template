@@ -21,6 +21,9 @@ var busy = false;
 // 当前任务的工作线程与它持有的运行锁，「停止并返回」要用。
 var runningThread = null;
 var runningLock = null;
+// 正在跑的任务 id 与最新进度文本。工作线程写、UI 线程读，只用于展示。
+var runningTaskId = null;
+var runningProgressText = "";
 // 每次启动任务自增。工作线程结束时拿它比对，避免人已经手动停掉、
 // 甚至又起了新任务之后，旧线程回来把界面刷成它自己的结果。
 var runGeneration = 0;
@@ -58,6 +61,7 @@ function renderMenu(config, state) {
       '      <text id="countdownText" text="" textSize="13sp" textColor="#c62828" marginTop="6" gravity="center"/>',
       '      <button id="scheduleButton" text="常驻调度表" h="52" marginTop="12"/>',
       '      <button id="taskButton" text="任务列表" h="52" marginTop="12"/>',
+      '      <button id="permissionButton" text="权限开启" h="52" marginTop="12"/>',
       '      <button id="recordButton" text="录制用例" h="52" marginTop="12"/>',
       '      <button id="recordsButton" text="运行记录" h="52" marginTop="12"/>',
       "    </vertical>",
@@ -127,6 +131,10 @@ function renderMenu(config, state) {
     stopCountdown("");
     renderTaskList(config, state);
   });
+  ui.permissionButton.on("click", function () {
+    stopCountdown("");
+    renderPermissions(config, state, "");
+  });
   ui.recordButton.on("click", function () {
     stopCountdown("");
     renderRecorder(config, state);
@@ -145,6 +153,9 @@ function refreshStatus(state) {
 }
 
 // ---- 任务列表 ----
+// 每行右侧一个「运行」按钮，跑起来之后**界面留在本页**，底部状态条显示
+// 跑到第几步，并提供暂停 / 继续 / 终止。这样一次授权之后可以连着挑任务跑，
+// 不用每次被甩到一个只能干等的运行页上。
 function renderTaskList(config, state) {
   var registry = require("../task-registry-autojs.js");
   var ids = registry.listIds();
@@ -162,12 +173,21 @@ function renderTaskList(config, state) {
           '  <list id="taskList" layout_weight="1">',
           // w="*" 不能省：列表项默认按内容宽度排版，白色底就只铺到文字末尾，
           // 长短不一的行看起来像没对齐的碎片。
-          '    <vertical padding="16 14" bg="#ffffff" w="*">',
-          '      <text text="{{title}}" textSize="16sp" textColor="#212121"/>',
-          '      <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
-          "    </vertical>",
+          '    <horizontal padding="16 12" bg="#ffffff" w="*" gravity="center_vertical">',
+          '      <vertical layout_weight="1">',
+          '        <text text="{{title}}" textSize="16sp" textColor="#212121"/>',
+          '        <text text="{{subtitle}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
+          "      </vertical>",
+          '      <button id="runButton" text="运行" style="Widget.AppCompat.Button.Colored" w="80" h="40" textSize="13sp"/>',
+          "    </horizontal>",
           "  </list>",
-          '  <text text="点一项立即执行；执行期间界面会留在这里" textSize="12sp" textColor="#666666" padding="16 10"/>',
+          '  <vertical bg="#ffffff" padding="16 10">',
+          '    <text id="runStatus" text="" textSize="13sp" textColor="#212121"/>',
+          '    <horizontal id="runControls" marginTop="8">',
+          '      <button id="pauseButton" text="暂停" layout_weight="1" h="44"/>',
+          '      <button id="cancelButton" text="终止" layout_weight="1" h="44" marginLeft="8"/>',
+          "    </horizontal>",
+          "  </vertical>",
           "</vertical>"
         ])
     )
@@ -177,8 +197,129 @@ function renderTaskList(config, state) {
   ui.backButton.on("click", function () {
     renderMenu(config, state);
   });
-  ui.taskList.on("item_click", function (item) {
-    runTaskInBackground(config, state, item.id);
+
+  // 每行的「运行」按钮单独接线。item_click 整行点击不再触发执行——
+  // 误触一下就跑起一个任务，在这种会操作真实游戏的工具里代价太大。
+  ui.taskList.on("item_bind", function (itemView, itemHolder) {
+    itemView.runButton.on("click", function () {
+      var item = itemHolder.item;
+      runTaskInBackground(config, state, item.id, { stayOnPage: true });
+    });
+  });
+
+  ui.pauseButton.on("click", function () {
+    var control = require("./run-control-autojs.js");
+    if (control.isPaused()) {
+      control.resume();
+    } else {
+      control.pause();
+    }
+    refreshRunBar();
+  });
+  ui.cancelButton.on("click", function () {
+    require("./run-control-autojs.js").requestStop();
+    refreshRunBar();
+  });
+
+  refreshRunBar();
+}
+
+// 刷新底部状态条。任何页面都可能已经切走，所以每次都要先确认控件还在。
+// 必须在 UI 线程调用。
+function refreshRunBar() {
+  if (!ui.runStatus) return;
+  var control = require("./run-control-autojs.js");
+
+  if (!busy) {
+    ui.runStatus.setText("空闲。点右侧「运行」执行单条任务。");
+    ui.pauseButton.setEnabled(false);
+    ui.cancelButton.setEnabled(false);
+    ui.pauseButton.setText("暂停");
+    return;
+  }
+
+  var head = "正在运行: " + (runningTaskId || "");
+  if (control.isStopRequested()) {
+    head = "正在终止: " + (runningTaskId || "");
+  } else if (control.isPaused()) {
+    head = "已暂停: " + (runningTaskId || "");
+  }
+  ui.runStatus.setText(head + (runningProgressText ? "\n" + runningProgressText : ""));
+  ui.pauseButton.setEnabled(!control.isStopRequested());
+  ui.cancelButton.setEnabled(true);
+  ui.pauseButton.setText(control.isPaused() ? "继续" : "暂停");
+}
+
+// ---- 权限开启 ----
+// 集中一页看清楚要开哪些权限、现在开没开、不开会怎样。
+// 只跳转系统设置，不代替人点同意。
+function renderPermissions(config, state, message) {
+  var permissions = require("./permissions-autojs.js");
+  var items = permissions.list();
+  var rows = [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var label =
+      item.status === true ? "已开启" : item.status === false ? "未开启" : "状态未知";
+    rows.push({
+      key: item.key,
+      openable: item.openable,
+      title: item.name + (item.required ? "（必需）" : "（可选）"),
+      statusText: label,
+      statusColor: item.status === true ? "#2e7d32" : item.status === false ? "#c62828" : "#f9a825",
+      // 按钮文案走数据绑定，不在 item_bind 里 setText——见下方关于 itemHolder.item 的说明。
+      actionText: item.openable ? "去设置" : "不可预设",
+      detail: item.detail
+    });
+  }
+
+  ui.layout(
+    xml(
+      ['<vertical bg="#fafafa" h="*">']
+        .concat(pageHeader("权限开启"))
+        .concat([
+          '  <list id="permissionList" layout_weight="1">',
+          '    <horizontal padding="16 12" bg="#ffffff" w="*" gravity="center_vertical">',
+          '      <vertical layout_weight="1">',
+          '        <text text="{{title}}" textSize="15sp" textColor="#212121"/>',
+          '        <text text="{{statusText}}" textSize="13sp" textColor="{{statusColor}}" marginTop="2"/>',
+          '        <text text="{{detail}}" textSize="12sp" textColor="#888888" marginTop="2"/>',
+          "      </vertical>",
+          '      <button id="openButton" text="{{actionText}}" w="88" h="40" textSize="13sp"/>',
+          "    </horizontal>",
+          "  </list>",
+          '  <text id="permissionHint" text="" textSize="12sp" textColor="#666666" padding="16 10"/>',
+          "</vertical>"
+        ])
+    )
+  );
+
+  ui.permissionList.setDataSource(rows);
+  ui.permissionHint.setText(
+    (message ? message + "\n" : "") +
+      "从系统设置返回后请点「返回」再进来一次，状态才会重新读取。"
+  );
+  ui.backButton.on("click", function () {
+    renderMenu(config, state);
+  });
+  // item_bind 里**不能立刻读 itemHolder.item**——绑定那一刻它还是 null，
+  // 读了会抛 TypeError 并把整个菜单脚本带崩（2026-09-16 实测，错在权限页这一处）。
+  // 只有在点击回调触发时它才填好，所以按钮文案走数据绑定，行数据只在 click 里读。
+  ui.permissionList.on("item_bind", function (itemView, itemHolder) {
+    itemView.openButton.on("click", function () {
+      var item = itemHolder.item;
+      if (!item) return;
+      if (!item.openable) {
+        // 截图授权没有可跳转的设置页——Android 不允许预授权，只能用到时弹。
+        toast("截图授权只能在任务用到时弹窗确认，无法预先开启");
+        return;
+      }
+      try {
+        require("./permissions-autojs.js").open(item.key);
+      } catch (error) {
+        toast("打不开设置页: " + (error.message || error));
+      }
+    });
   });
 }
 
@@ -1004,8 +1145,10 @@ function renderAnchorPicker(config, state, session, index) {
 // 必须跑在工作线程：任务里全是 sleep 和阻塞轮询，放在 UI 线程会直接卡死界面，
 // 连"正在运行"这几个字都刷不出来。
 // taskOrId：登记表里的任务 ID，或现造的任务对象（如录制用例的回放）。
-function runTaskInBackground(config, state, taskOrId) {
+// options.stayOnPage：跑起来之后不跳转到运行页，界面留在原地（任务列表用）。
+function runTaskInBackground(config, state, taskOrId, options) {
   var runLock = require("./run-lock-autojs.js");
+  var runOptions = options || {};
   var taskId = typeof taskOrId === "string" ? taskOrId : taskOrId.id;
 
   if (busy) {
@@ -1027,21 +1170,41 @@ function runTaskInBackground(config, state, taskOrId) {
 
   busy = true;
   runningLock = lock;
+  runningTaskId = taskId;
+  runningProgressText = "";
   runGeneration += 1;
   var generation = runGeneration;
   state.lastStatus = "正在运行: " + taskId;
 
-  renderRunning(config, state, taskId);
+  if (runOptions.stayOnPage) {
+    refreshRunBar();
+  } else {
+    renderRunning(config, state, taskId);
+  }
 
   runningThread = threads.start(function () {
     var registry = require("../task-registry-autojs.js");
+    var errors = require("./errors-autojs.js");
     var summary;
     try {
       var task = typeof taskOrId === "string" ? registry.get(taskOrId) : taskOrId;
-      runtime.run(config, task);
+      runtime.run(config, task, {
+        // 回调在工作线程里触发，只更新变量；改界面必须回到 UI 线程。
+        onProgress: function (step) {
+          runningProgressText =
+            "第 " + step.index + "/" + step.total + " 步　" + step.name;
+          if (generation !== runGeneration) return;
+          ui.run(function () {
+            refreshRunBar();
+            refreshRunningPage();
+          });
+        }
+      });
       summary = "完成: " + taskId;
     } catch (error) {
-      summary = "失败: " + (error && error.message ? error.message : String(error));
+      summary = errors.isCancelled(error)
+        ? "已终止: " + taskId
+        : "失败: " + (error && error.message ? error.message : String(error));
     } finally {
       // 无论正常结束还是抛错，锁都必须还回去，否则下一次任务永远起不来
       // （心跳会让它二十秒内一直看起来是活的）。
@@ -1055,10 +1218,18 @@ function runTaskInBackground(config, state, taskOrId) {
     busy = false;
     runningThread = null;
     runningLock = null;
+    runningTaskId = null;
+    runningProgressText = "";
     state.lastStatus = summary;
     // 工作线程不能直接碰视图，必须回到 UI 线程更新。
     ui.run(function () {
-      renderMenu(config, state);
+      if (runOptions.stayOnPage) {
+        // 留在任务列表：跑完只刷新状态条，人可以接着挑下一条跑。
+        // 这是「授权一次、连着跑几个任务」体验的一半，另一半是截图会话复用。
+        refreshRunBar();
+      } else {
+        renderMenu(config, state);
+      }
       toast(summary);
     });
   });
@@ -1080,11 +1251,23 @@ function stopRunningTask(config, state) {
   }
   runningThread = null;
   runningLock = null;
+  runningTaskId = null;
+  runningProgressText = "";
   busy = false;
+  require("./run-control-autojs.js").reset();
 
   state.lastStatus = stopped ? "已手动停止上一个任务" : "没有正在运行的任务";
   renderMenu(config, state);
   toast(state.lastStatus);
+}
+
+// 运行页上的进度行。和任务列表的状态条一样，切走之后控件就没了，先确认再改。
+function refreshRunningPage() {
+  if (!ui.runningProgress) return;
+  var control = require("./run-control-autojs.js");
+  var prefix = control.isPaused() ? "已暂停　" : "";
+  ui.runningProgress.setText(prefix + (runningProgressText || "准备中…"));
+  ui.runningPauseButton.setText(control.isPaused() ? "继续" : "暂停");
 }
 
 function renderRunning(config, state, taskId) {
@@ -1094,10 +1277,15 @@ function renderRunning(config, state, taskId) {
       '  <vertical layout_weight="1" gravity="center">',
       '    <text text="正在运行" textSize="20sp" gravity="center"/>',
       '    <text text="' + taskId + '" textSize="14sp" textColor="#666666" gravity="center" marginTop="8"/>',
+      '    <text id="runningProgress" text="准备中…" textSize="14sp" textColor="#1976d2" gravity="center" marginTop="16"/>',
       '    <text textSize="12sp" textColor="#888888" gravity="center" marginTop="24" text="截图授权弹窗出现时请点「立即开始」"/>',
       '    <text textSize="12sp" textColor="#888888" gravity="center" marginTop="8" text="常驻会一直跑下去，要回菜单请点下方按钮"/>',
       "  </vertical>",
-      '  <horizontal padding="16">',
+      '  <horizontal padding="16 8">',
+      '    <button id="runningPauseButton" text="暂停" layout_weight="1" h="48"/>',
+      '    <button id="runningCancelButton" text="终止" layout_weight="1" h="48" marginLeft="8"/>',
+      "  </horizontal>",
+      '  <horizontal padding="16 0 16 16">',
       '    <button id="stopButton" text="停止并返回" layout_weight="1" h="52"/>',
       "  </horizontal>",
       "</vertical>"
@@ -1107,6 +1295,25 @@ function renderRunning(config, state, taskId) {
   ui.stopButton.on("click", function () {
     stopRunningTask(config, state);
   });
+  ui.runningPauseButton.on("click", function () {
+    var control = require("./run-control-autojs.js");
+    if (control.isPaused()) {
+      control.resume();
+    } else {
+      control.pause();
+    }
+    refreshRunningPage();
+  });
+  // 「终止」与「停止并返回」的区别：终止是协作式的，任务跑到下一个检查点
+  // 自己收尾、写 result.json（status 记 cancelled）；停止并返回是硬中断线程，
+  // 立即回菜单，任务可能停在半路且没有结果文件。
+  ui.runningCancelButton.on("click", function () {
+    require("./run-control-autojs.js").requestStop();
+    refreshRunningPage();
+    toast("已请求终止，等任务跑到下一个检查点");
+  });
+
+  refreshRunningPage();
 }
 
 // 开发路径（run-task.ps1）会在脚本同级写一个 task.txt。它存在就说明这次是

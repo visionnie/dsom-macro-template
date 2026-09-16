@@ -4,6 +4,7 @@
 // =====================================================================
 
 var errors = require("./errors-autojs.js");
+var control = require("./run-control-autojs.js");
 
 function create(options) {
   var logger = options.logger;
@@ -130,6 +131,7 @@ function create(options) {
           return "package";
         }
       }
+      control.checkpoint(logger);
       sleep(runtimeConfig.pollIntervalMs || 250);
     }
 
@@ -150,6 +152,9 @@ function create(options) {
   function waitUntil(name, predicate, timeoutMs, pollIntervalMs) {
     var deadline = Date.now() + timeoutMs;
     while (Date.now() <= deadline) {
+      // 检查点放在轮询里而不是只放在节点之间：一个 tapImage 的找图超时默认 15 秒，
+      // 只在节点边界检查的话，按下暂停最坏要等 15 秒才有反应。
+      control.checkpoint(logger);
       if (predicate()) {
         logger.info("条件满足: " + name);
         return true;

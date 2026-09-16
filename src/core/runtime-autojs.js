@@ -9,6 +9,7 @@ var actionsModule = require("./actions-autojs.js");
 var ocrModule = require("./ocr-autojs.js");
 var workflow = require("./workflow-autojs.js");
 var errors = require("./errors-autojs.js");
+var control = require("./run-control-autojs.js");
 
 function validateConfig(config) {
   if (!config.project || !config.project.id || !config.project.name) {
@@ -96,8 +97,30 @@ function toPathSegment(taskId) {
   return String(taskId).replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
-function run(config, task) {
+// 可被暂停/终止打断的等待。切成 500 毫秒一段，每段之间过一次检查点。
+// 粒度取 500：再细意义不大（人感知不到），再粗按下终止要等太久。
+function sleepInterruptibly(totalMs, logger) {
+  var sliceMs = 500;
+  var remaining = totalMs;
+  while (remaining > 0) {
+    control.checkpoint(logger);
+    var step = remaining < sliceMs ? remaining : sliceMs;
+    sleep(step);
+    remaining -= step;
+  }
+  control.checkpoint(logger);
+}
+
+// options.onProgress：任务跑到第几步时回调，界面用它就地刷新。
+//   回调在**工作线程**里触发，实现方要自己 ui.run 回到 UI 线程再改界面。
+//   回调里抛错不能掀翻任务，所以统一吞掉并记一条日志。
+function run(config, task, options) {
   validateConfig(config);
+
+  var runOptions = options || {};
+  // 每次启动任务都清掉上一轮遗留的暂停/终止标志，否则上次点过暂停没继续，
+  // 这次一起步就卡住，而且看不出原因。
+  control.reset();
 
   var startedAt = new Date();
   var runId = startedAt.getTime();
@@ -121,7 +144,18 @@ function run(config, task) {
     ocr: ocr,
     workflow: workflow,
     outputDir: outputDir,
-    assetPath: createAssetResolver(config)
+    assetPath: createAssetResolver(config),
+    control: control,
+    progress: {
+      report: function (step) {
+        if (!runOptions.onProgress) return;
+        try {
+          runOptions.onProgress(step);
+        } catch (error) {
+          logger.warn("进度回调出错，已忽略: " + error);
+        }
+      }
+    }
   };
   var result = {
     projectId: config.project.id,
@@ -178,7 +212,9 @@ function run(config, task) {
         actions.launchPackage(config.game.packageName);
         var settleMs = config.runtime.launchSettleMs || 15000;
         logger.info("等待应用启动 " + settleMs + " 毫秒后再申请截图权限");
-        sleep(settleMs);
+        // 本机取值 25 秒。整段 sleep 掉的话，这期间按暂停/终止毫无反应，
+        // 而这正好是任务最开始、人最容易发现点错了想撤回的时候。切成小段带检查点。
+        sleepInterruptibly(settleMs, logger);
 
       } else {
         actions.launchPackageAndWait(
@@ -212,14 +248,19 @@ function run(config, task) {
     result.status = "passed";
     logger.info("任务完成: " + task.name);
   } catch (error) {
-    // broken = 环境或前置条件不成立（权限、启动、素材、屏幕），failed = 用例真没通过。
-    // 两者必须分开统计，否则通过率会失去意义。
+    // broken = 环境或前置条件不成立（权限、启动、素材、屏幕），failed = 用例真没通过，
+    // cancelled = 人自己按了终止。三者必须分开统计，否则通过率会失去意义。
     result.status = errors.statusOf(error);
     result.error = getErrorDetail(error);
-    logger.error(
-      (result.status === "broken" ? "任务中断（环境问题）: " : "任务失败: ") + result.error
-    );
-    if (screen.hasPermission()) {
+    if (result.status === "cancelled") {
+      logger.info("任务已被手动终止: " + result.error);
+    } else {
+      logger.error(
+        (result.status === "broken" ? "任务中断（环境问题）: " : "任务失败: ") + result.error
+      );
+    }
+    // 人主动终止不留失败截图：那不是故障现场，存了只会让 output 目录越堆越大。
+    if (result.status !== "cancelled" && screen.hasPermission()) {
       try {
         result.failureScreenshot = screen.saveStage("task-failed");
       } catch (captureError) {
