@@ -118,6 +118,8 @@ function buildCase(session) {
   }
 
   return {
+    // 显式写出 model，让产物自带结构标识，不靠「有没有 nodes」去猜。
+    model: "nodes",
     schemaVersion: 1,
     id: "recorded-" + session.id,
     name: "录制用例 " + session.id,

@@ -5,7 +5,15 @@
 // 安全边界：等待、重试和用例总时长必须落在 LIMITS 内，避免设备空转或长时间误点
 // =====================================================================
 
-// 结构版本。录制器写入、回放器校验；不兼容改动必须递增并在 CASE-SCHEMA.md 说明迁移方式。
+// 本文件校验的是 CASE-SCHEMA.md 设计的 steps 三段式结构。
+// 它**没有执行器**——实际跑着的是 case-runner-autojs.js 的 nodes 节点图模型。
+// 用例文档的身份是 (model, schemaVersion) 这一对：两套结构各自有独立的版本号空间，
+// 都从 1 开始互不干扰，由 model 判别。此前两边都只写 schemaVersion: 1，
+// 导致照设计稿写的用例喂给执行器时报一串看不懂的字段错（ONBOARDING 第 11 条陷阱）。
+var CASE_MODEL = "steps";
+
+// 结构版本，仅限 steps 模型。录制器写入、回放器校验；
+// 不兼容改动必须递增并在 CASE-SCHEMA.md 说明迁移方式。
 var SCHEMA_VERSION = 1;
 
 // 用例由机器自动执行，任何一项越界都可能让设备空转或反复误点，因此上限写在通用层。
@@ -470,10 +478,30 @@ function validate(caseDocument) {
     return { valid: false, errors: collector.errors, warnings: collector.warnings };
   }
 
+  // 先认结构。nodes 节点图和 steps 三段式字段完全不同，
+  // 不先判别就逐字段校验，只会报一串看不出根因的错。
+  if (caseDocument.model != null && caseDocument.model !== CASE_MODEL) {
+    collector.error(
+      "model",
+      "本校验器只认 " + CASE_MODEL + " 模型，实际 " + caseDocument.model
+    );
+    return { valid: false, errors: collector.errors, warnings: collector.warnings };
+  }
+  if (caseDocument.model == null && caseDocument.steps == null && caseDocument.nodes != null) {
+    collector.error(
+      "model",
+      "这是 CASE-MVP.md 的 nodes 节点图用例，请用 case-runner-autojs.js 的 validateCase 校验"
+    );
+    return { valid: false, errors: collector.errors, warnings: collector.warnings };
+  }
+  if (caseDocument.model !== CASE_MODEL) {
+    collector.error("model", "必须显式声明为 " + CASE_MODEL + "，用于与 nodes 模型区分");
+  }
+
   if (caseDocument.schemaVersion !== SCHEMA_VERSION) {
     collector.error(
       "schemaVersion",
-      "期望 " + SCHEMA_VERSION + "，实际 " + caseDocument.schemaVersion
+      "期望 " + CASE_MODEL + " 模型的 " + SCHEMA_VERSION + "，实际 " + caseDocument.schemaVersion
     );
   }
   if (!isNonEmptyString(caseDocument.id) || !CASE_ID_PATTERN.test(caseDocument.id)) {
@@ -526,6 +554,7 @@ function assertValid(caseDocument) {
 function createSkeleton(options) {
   var skeletonOptions = options || {};
   return {
+    model: CASE_MODEL,
     schemaVersion: SCHEMA_VERSION,
     id: skeletonOptions.id || "replace-me",
     name: skeletonOptions.name || "待命名用例",
@@ -553,6 +582,7 @@ function createSkeleton(options) {
 }
 
 module.exports = {
+  CASE_MODEL: CASE_MODEL,
   SCHEMA_VERSION: SCHEMA_VERSION,
   LIMITS: LIMITS,
   DEFAULTS: DEFAULTS,

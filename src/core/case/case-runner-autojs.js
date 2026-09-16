@@ -12,6 +12,12 @@
 var errors = require("../errors-autojs.js");
 var geometry = require("./case-geometry-autojs.js");
 
+// 用例文档的身份是 (model, schemaVersion) 这一对，不是单独的 schemaVersion。
+// 仓库里有两套结构：本文件执行的 nodes 节点图，和 CASE-SCHEMA.md 设计的 steps 三段式。
+// 它们字段完全不同，早期却都只写 schemaVersion: 1，照着设计稿写出来的用例喂进来
+// 只会报一串看不懂的字段错误。加 model 判别后各自有独立的版本号空间，互相认得出对方。
+// 缺省按 nodes 解释，所以此前所有用例 JSON 与录制器产物都不用改。
+var CASE_MODEL = "nodes";
 var SCHEMA_VERSION = 1;
 var DEFAULT_MAX_NODE_VISITS = 500;
 var DEFAULT_TAP_IMAGE_WAIT_MS = 15000;
@@ -62,13 +68,34 @@ function loadCase(casePath) {
   return data;
 }
 
+// 先认结构、再校字段。照 CASE-SCHEMA.md 的 steps 结构写出来的用例，
+// 逐字段校验只会报「缺少 nodes」之类看不出根因的错，人会以为是自己哪里写漏了。
+// 这里一句话说清它是哪套结构、该看哪份文档。
+function assertNodesModel(data) {
+  if (data.model != null && data.model !== CASE_MODEL) {
+    throw new Error(
+      "用例 model 是 " + data.model + "，case-runner 只执行 " + CASE_MODEL +
+        " 节点图模型；写法见 .docs/CASE-MVP.md"
+    );
+  }
+  if (data.model == null && data.nodes == null && data.steps != null) {
+    throw new Error(
+      "这条用例是 CASE-SCHEMA.md 的 steps 三段式结构（steps / expect / verify），" +
+        "它只有校验器没有执行器，喂给 case-runner 跑不了。" +
+        "请改写成 CASE-MVP.md 的 nodes 节点图"
+    );
+  }
+}
+
 function validateCase(data) {
   if (!data || typeof data !== "object") {
     throw new Error("用例根必须是对象");
   }
+  assertNodesModel(data);
   if (data.schemaVersion !== SCHEMA_VERSION) {
     throw new Error(
-      "用例 schemaVersion 不匹配，期望 " + SCHEMA_VERSION + "，实际 " + data.schemaVersion
+      "用例 schemaVersion 不匹配，期望 " + CASE_MODEL + " 模型的 " +
+        SCHEMA_VERSION + "，实际 " + data.schemaVersion
     );
   }
   if (!data.id) throw new Error("用例缺少 id");
@@ -454,6 +481,7 @@ function executeTapImage(context, node, viewport) {
 }
 
 module.exports = {
+  CASE_MODEL: CASE_MODEL,
   SCHEMA_VERSION: SCHEMA_VERSION,
   loadCase: loadCase,
   validateCase: validateCase,

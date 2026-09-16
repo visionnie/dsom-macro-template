@@ -6,8 +6,16 @@
 > （`case-schema-autojs.js`），**没有执行器**，没有任何用例是这个形状。
 >
 > 实际跑着的是另一套 `nodes` 节点图结构，由 `case-runner-autojs.js` 实现，
-> 契约写在 `CASE-MVP.md`。两者字段完全不同却共用 `schemaVersion: 1`，
-> 这是历史遗留问题——本文档的结构真要落地时，必须先把版本号分开。
+> 契约写在 `CASE-MVP.md`。
+>
+> **两套结构靠 `model` 判别**：本文档是 `model: "steps"`（必须显式写），
+> `CASE-MVP.md` 是 `model: "nodes"`（缺省值）。用例文档的身份是
+> `(model, schemaVersion)` 这一对——两套结构各有独立的版本号空间，都从 `1` 开始，
+> 互不干扰。此前两边都只写 `schemaVersion: 1`，互喂时只报一串看不出根因的字段错；
+> 现在两个校验器都先认结构，拿错了直接说清该去看哪份文档。
+>
+> 本文档的结构真要落地时，递增的是 `steps` 模型自己的 `schemaVersion`，
+> 不影响 `nodes` 模型。
 >
 > 本文档的三条设计决定已有两条落地到 MVP：**归一化坐标 + 基线分辨率**
 > （`case-geometry` 已接入 `case-runner`，做跨分辨率换算）、**`broken` 与 `failed` 分离**
@@ -16,7 +24,7 @@
 
 ## 定位
 
-用例（case）是一段可序列化、可回放的操作序列，是录制器、回放器和报告三方唯一的契约。任何一方改动字段都必须先改本文档并递增 `schemaVersion`。
+用例（case）是一段可序列化、可回放的操作序列，是录制器、回放器和报告三方唯一的契约。任何一方改动字段都必须先改本文档并递增本模型的 `schemaVersion`。
 
 实现在 `src/core/case/`：
 
@@ -47,6 +55,7 @@
 
 ```json
 {
+  "model": "steps",
   "schemaVersion": 1,
   "id": "rxfs-daily-signin",
   "name": "每日签到",
@@ -106,7 +115,7 @@
 
 ## 字段
 
-**顶层**：`schemaVersion` `id`（小写字母数字连字符）`name` `tags?` `baseline` `recording?` `requirements` `steps`。
+**顶层**：`model`（必须是 `"steps"`）`schemaVersion` `id`（小写字母数字连字符）`name` `tags?` `baseline` `recording?` `requirements` `steps`。
 
 `requirements.maxDurationMs` 必填且有上限，用例必须能被强制中止；`launchGame` 不为 `false` 时 `packageName` 必填。
 

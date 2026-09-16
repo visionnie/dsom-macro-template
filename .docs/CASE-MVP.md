@@ -1,23 +1,30 @@
 # 已实现的用例格式 - CASE-MVP.md
 
-## 先读这一段：这里有两套用例结构，别弄混
+## 先读这一段：这里有两套用例结构，用 `model` 区分
 
-仓库里同时存在两套「用例」，字段完全不同，却都写着 `schemaVersion: 1`：
+仓库里同时存在两套「用例」，字段完全不同：
 
 | | 本文档（`nodes` 节点图） | `CASE-SCHEMA.md`（`steps` 三段式） |
 |---|---|---|
+| `model` | `"nodes"`（缺省值） | `"steps"`（必须显式写） |
 | 实现文件 | `src/core/case/case-runner-autojs.js` | `src/core/case/case-schema-autojs.js` |
 | 状态 | **已实现，正在跑真实用例** | **只有设计稿和校验器，没有执行器** |
 | 谁在用 | `src/tasks/case-*-autojs.js` → 真实 JSON | 没有任何代码 require 它 |
+
+**用例文档的身份是 `(model, schemaVersion)` 这一对，不是单独的 `schemaVersion`。**
+两套结构各有独立的版本号空间，都从 `1` 开始、互不干扰。早期两边都只写 `schemaVersion: 1`，
+照设计稿写出来的用例喂给执行器只会报一串「缺少 nodes」之类看不出根因的错
+（ONBOARDING 第 11 条陷阱）。现在两个校验器都先认结构再校字段，互喂时直接说清
+「这是另一套结构，去看哪份文档」。
+
+`model` 缺省按 `"nodes"` 解释，所以此前所有用例 JSON 和录制器产物都不用改；
+新写的用例建议显式写上，让文件自带结构标识。
 
 `case-geometry-autojs.js`（归一化坐标换算）**已经在实际调用链上**——
 `case-runner` 用它做跨分辨率换算。`case-schema-autojs.js` 目前只被 geometry 引用，
 用于取默认的 `scaleStrategy`；它那套 `steps` 校验器仍然没有执行器。
 
-**写新用例、改回放器，一律以本文档为准。** 看到 `CASE-SCHEMA.md` 里的
-`steps` / `expect` / `verify` / `anchor` / `swipe`，那些字段喂给 `case-runner` 会直接报错。
-
-两者共用 `schemaVersion: 1` 是个历史遗留问题，等 `steps` 模型真要落地时必须先分开版本号。
+**写新用例、改回放器，一律以本文档为准。**
 
 ## 这套格式的由来
 
@@ -31,7 +38,8 @@
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `schemaVersion` | 是 | 必须是 `1`，不等则抛错 |
+| `model` | 否 | 缺省 `"nodes"`。写成 `"steps"` 或别的值直接抛错，见本文开头 |
+| `schemaVersion` | 是 | `nodes` 模型的版本号，必须是 `1`，不等则抛错 |
 | `id` | 是 | 用例标识 |
 | `name` | 是 | 人类可读名称 |
 | `nodes` | 是 | 非空数组 |
@@ -176,7 +184,7 @@ JSON 带 UTF-8 BOM 也能正常解析：Windows 上保存 JSON 常常带 BOM，
 
 ## 加一条新用例
 
-1. `src/cases/<用例名>.json` 写节点图，`schemaVersion` 填 `1`
+1. `src/cases/<用例名>.json` 写节点图，`model` 填 `"nodes"`、`schemaVersion` 填 `1`
 2. `src/assets/game/` 放锚点图，**用户手工框选**，别自动截取
    （`RECORDER-RESEARCH.md` 记录了自动挑锚点的教训：把动态背景框进去就再也匹配不上）
 3. `src/tasks/case-<用例名>-autojs.js` 照抄 `case-boss-feast-layer3-autojs.js`，
