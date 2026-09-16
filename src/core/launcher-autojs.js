@@ -11,9 +11,19 @@ var runtime = require("./runtime-autojs.js");
 
 var DEFAULT_AUTO_START_SECONDS = 10;
 var RECENT_RUN_LIMIT = 20;
+var AUTO_START_PREF_KEY = "autoStartEnabled";
 
-// 当前是否有任务在跑。UI 线程与工作线程都读它，只做布尔判断，不需要锁。
+// 本引擎内是否有任务在跑。**这个布尔量只在一个脚本引擎内有效**，
+// 真正的互斥在 run-lock（落盘 + 心跳）——入口被重新执行时会是一个新引擎，
+// 这里的 busy 又变回 false，拦不住第二个任务。见 run-lock-autojs.js 的文件头。
 var busy = false;
+
+// 当前任务的工作线程与它持有的运行锁，「停止并返回」要用。
+var runningThread = null;
+var runningLock = null;
+// 每次启动任务自增。工作线程结束时拿它比对，避免人已经手动停掉、
+// 甚至又起了新任务之后，旧线程回来把界面刷成它自己的结果。
+var runGeneration = 0;
 
 function xml(lines) {
   return lines.join("\n");
@@ -44,6 +54,7 @@ function renderMenu(config, state) {
       '  <ScrollView layout_weight="1">',
       '    <vertical padding="16">',
       '      <button id="residentButton" text="开始常驻调度" style="Widget.AppCompat.Button.Colored" h="52"/>',
+      '      <checkbox id="autoStartCheck" text="启动后自动进入常驻调度" textSize="13sp" marginTop="6"/>',
       '      <text id="countdownText" text="" textSize="13sp" textColor="#c62828" marginTop="6" gravity="center"/>',
       '      <button id="scheduleButton" text="常驻调度表" h="52" marginTop="12"/>',
       '      <button id="taskButton" text="任务列表" h="52" marginTop="12"/>',
@@ -67,11 +78,29 @@ function renderMenu(config, state) {
     }
   }
 
+  // 自动进入是**默认关**的，必须人在设备上勾一次，选择存在设备侧偏好里跨重启保留。
+  // 为什么不做成配置项：config 是代码，改它要回 PC 重新打包；而「这台设备要不要
+  // 无人值守」是站在设备前的人的决定。默认关也避免了误触发——2026-09-16 实测，
+  // 入口被重建时倒计时会在没人察觉的情况下又起一个常驻。
+  //
+  // 代价：开机自启这条链路依赖这个勾选。没勾就只会停在菜单，不会进常驻。
+  var prefs = require("./device-prefs-autojs.js");
+  var autoStartEnabled = prefs.get(config, AUTO_START_PREF_KEY, false) === true;
+  // 先设值再挂监听，否则 setChecked 会把自己的回调触发一遍，白写一次盘。
+  ui.autoStartCheck.setChecked(autoStartEnabled);
+  ui.autoStartCheck.on("check", function (checked) {
+    prefs.set(config, AUTO_START_PREF_KEY, checked === true);
+    // 当场不开始倒计时：人刚勾完还站在设备前，这时候自己跑起来只会让人措手不及。
+    ui.countdownText.setText(
+      checked ? "已开启，下次启动脚本时生效" : "已关闭，不会自动进入常驻"
+    );
+  });
+
   // 倒计时的意义：开机自启后没人点菜单，常驻必须自己起来；
   // 而人站在设备前时，任何一次点击都应该立刻取消它。
   // 只在第一次显示菜单时倒计时。任务跑完、从子页面返回都会重新渲染菜单，
   // 若每次都倒计时，人手动跑完一个任务、10 秒没碰屏幕就被拖进常驻（2026-09-15 实测）。
-  var shouldCountDown = autoSeconds > 0 && !state.autoStartConsumed;
+  var shouldCountDown = autoStartEnabled && autoSeconds > 0 && !state.autoStartConsumed;
   state.autoStartConsumed = true;
   if (shouldCountDown) {
     ui.countdownText.setText(remaining + " 秒后自动进入常驻调度（点任意按钮取消）");
@@ -976,17 +1005,35 @@ function renderAnchorPicker(config, state, session, index) {
 // 连"正在运行"这几个字都刷不出来。
 // taskOrId：登记表里的任务 ID，或现造的任务对象（如录制用例的回放）。
 function runTaskInBackground(config, state, taskOrId) {
+  var runLock = require("./run-lock-autojs.js");
+  var taskId = typeof taskOrId === "string" ? taskOrId : taskOrId.id;
+
   if (busy) {
     toast("已有任务在运行");
     return;
   }
+  // 真正的互斥在这里。busy 只挡得住同一个引擎里的重复点击，
+  // 而入口被重建重跑时是一个新引擎——那正是 2026-09-16 撞上的情况：
+  // BOSS 任务还在跑，菜单被重建、倒计时又起了一个常驻。
+  var lock = runLock.acquire(config, taskId);
+  if (!lock) {
+    var holder = runLock.inspect(config);
+    var holderText = holder ? holder.taskId : "未知任务";
+    toast("已有任务在运行: " + holderText);
+    state.lastStatus = "已有任务在运行: " + holderText + "，本次未启动";
+    refreshStatus(state);
+    return;
+  }
+
   busy = true;
-  var taskId = typeof taskOrId === "string" ? taskOrId : taskOrId.id;
+  runningLock = lock;
+  runGeneration += 1;
+  var generation = runGeneration;
   state.lastStatus = "正在运行: " + taskId;
 
   renderRunning(config, state, taskId);
 
-  threads.start(function () {
+  runningThread = threads.start(function () {
     var registry = require("../task-registry-autojs.js");
     var summary;
     try {
@@ -995,8 +1042,19 @@ function runTaskInBackground(config, state, taskOrId) {
       summary = "完成: " + taskId;
     } catch (error) {
       summary = "失败: " + (error && error.message ? error.message : String(error));
+    } finally {
+      // 无论正常结束还是抛错，锁都必须还回去，否则下一次任务永远起不来
+      // （心跳会让它二十秒内一直看起来是活的）。
+      try { lock.release(); } catch (releaseError) {}
+    }
+
+    // 人已经点过「停止并返回」、甚至又起了新任务时，这一轮的结果不该再改界面。
+    if (generation !== runGeneration) {
+      return;
     }
     busy = false;
+    runningThread = null;
+    runningLock = null;
     state.lastStatus = summary;
     // 工作线程不能直接碰视图，必须回到 UI 线程更新。
     ui.run(function () {
@@ -1006,16 +1064,49 @@ function runTaskInBackground(config, state, taskOrId) {
   });
 }
 
+// 「停止并返回」：此前这一页没有任何出口，任务跑完才会自己回菜单，
+// 而常驻最长跑 12 小时——等于人被锁在这一页上（2026-09-16 用户反馈）。
+// 这是硬中断：工作线程被 interrupt，任务不保证跑到一个干净的断点。
+function stopRunningTask(config, state) {
+  // 先让 generation 失效，确保被中断的线程回来时不再刷界面。
+  runGeneration += 1;
+  var stopped = runningThread !== null;
+
+  if (runningLock) {
+    try { runningLock.release(); } catch (error) {}
+  }
+  if (runningThread) {
+    try { runningThread.interrupt(); } catch (error) {}
+  }
+  runningThread = null;
+  runningLock = null;
+  busy = false;
+
+  state.lastStatus = stopped ? "已手动停止上一个任务" : "没有正在运行的任务";
+  renderMenu(config, state);
+  toast(state.lastStatus);
+}
+
 function renderRunning(config, state, taskId) {
   ui.layout(
     xml([
-      '<vertical bg="#fafafa" h="*" gravity="center">',
-      '  <text text="正在运行" textSize="20sp" gravity="center"/>',
-      '  <text text="' + taskId + '" textSize="14sp" textColor="#666666" gravity="center" marginTop="8"/>',
-      '  <text textSize="12sp" textColor="#888888" gravity="center" marginTop="24" text="截图授权弹窗出现时请点「立即开始」"/>',
+      '<vertical bg="#fafafa" h="*">',
+      '  <vertical layout_weight="1" gravity="center">',
+      '    <text text="正在运行" textSize="20sp" gravity="center"/>',
+      '    <text text="' + taskId + '" textSize="14sp" textColor="#666666" gravity="center" marginTop="8"/>',
+      '    <text textSize="12sp" textColor="#888888" gravity="center" marginTop="24" text="截图授权弹窗出现时请点「立即开始」"/>',
+      '    <text textSize="12sp" textColor="#888888" gravity="center" marginTop="8" text="常驻会一直跑下去，要回菜单请点下方按钮"/>',
+      "  </vertical>",
+      '  <horizontal padding="16">',
+      '    <button id="stopButton" text="停止并返回" layout_weight="1" h="52"/>',
+      "  </horizontal>",
       "</vertical>"
     ])
   );
+
+  ui.stopButton.on("click", function () {
+    stopRunningTask(config, state);
+  });
 }
 
 // 开发路径（run-task.ps1）会在脚本同级写一个 task.txt。它存在就说明这次是
