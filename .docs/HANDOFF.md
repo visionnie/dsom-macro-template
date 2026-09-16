@@ -14,6 +14,22 @@
 **2026-09-15 回流自 rxfs**：录制器框锚点 / 生成用例 / 回放（`case/recorded-case-autojs.js`、
 用例 `assetBase: "case"`），以及切前台修复（`foreground-autojs.js`：UI 模式下
 `app.launchPackage` 切回自己会销毁脚本页）。均在 rxfs 实机跑通，见 `RECORDER.md`。
+
+**2026-09-16 回流自 rxfs**（**PC 侧验证，实机未验**——rxfs 的设备当前卡在游戏不转横屏）：
+
+- **用例结构双轨用 `model` 判别符分开**：`nodes`（已实现）与 `steps`（设计稿）
+  各有独立版本号空间，`model` 缺省按 `nodes` 解释，旧用例不用改。
+- **设备侧调度增补层**：`core/schedule-store-autojs.js` + `core/recorded-task-autojs.js`。
+  调度表 = 代码基表 + `<outputRoot>/schedule/overlay.json`，调度项可写
+  `taskId: "recorded:<会话 id>"`，让设备上录的用例不重新打包也能进常驻。见 `RESIDENT.md`。
+- `resident` 取不到任务时区分「没登记」（抛）与 `broken`（跳过并警告）。
+- `runtime` 清洗任务 id 里不能做目录名的字符——冒号在 Windows 上建不了文件，
+  `adb pull` 会静默取不回结果。
+- `npm run check` 新增调度表静态校验。
+- **`create-game-project.js` 的拷贝清单补上 `src/entry/menu-autojs.js`**：入口拆成
+  auto + ui 时漏了，此前生成出来的新项目会没有菜单界面、`npm run build` 直接失败。
+  已实际生成一个项目验证 check / build 均通过。
+
 注意：本文件下方的「下次启动」与 Next Action 已过期，以工作区 `.docs/HANDOFF.md` 为准。
 
 ## Iteration 4 - 第一条真实用例逼出的五处通用层修复
