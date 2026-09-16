@@ -15,7 +15,8 @@
 用例 `assetBase: "case"`），以及切前台修复（`foreground-autojs.js`：UI 模式下
 `app.launchPackage` 切回自己会销毁脚本页）。均在 rxfs 实机跑通，见 `RECORDER.md`。
 
-**2026-09-16 回流自 rxfs**（**PC 侧验证，实机未验**——rxfs 的设备当前卡在游戏不转横屏）：
+**2026-09-16 回流自 rxfs**（调度增补层与 `recorded:` 解析当天已在 rxfs 上
+**开发路径与独立 APK 双双实机验证通过**）：
 
 - **用例结构双轨用 `model` 判别符分开**：`nodes`（已实现）与 `steps`（设计稿）
   各有独立版本号空间，`model` 缺省按 `nodes` 解释，旧用例不用改。
