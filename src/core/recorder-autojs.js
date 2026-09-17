@@ -18,8 +18,24 @@
 
 var DEFAULT_TAP_DURATION_MS = 120;
 var FORWARD_SETTLE_MS = 180;
-var PILL_WIDTH = 190;
-var PILL_HEIGHT = 76;
+// 等「捕获层已让出触摸」的上限，以及确认之后再多留的一拍。
+var TOUCHABLE_WAIT_MS = 800;
+// setTouchable(false) 的回调返回 != 窗口真的不再接收触摸：AutoJs6 改的是 LayoutParams，
+// 要等 WindowManager 做完一次 relayout 才生效。60 毫秒实测不够（回调已返回、
+// 转发出去的那一下仍被捕获层吃掉，表现为"步数照记、游戏没反应"）。
+var FORWARD_GUARD_MS = 250;
+
+// 展开态与收起态的控制条尺寸。
+// 宽度要放得下「停止 / 撤销 / 收起」三个按钮：窄了会换行，把第二行顶出窗口外面，
+// 人就点不到停止了（2026-09-17 实测 190 宽时就是这样）。
+var PILL_WIDTH = 290;
+var PILL_HEIGHT = 88;
+// 收起后只剩一个小把手贴在左上角。做这件事是因为控制条会盖住游戏左上角，
+// 而那一块恰好是任务栏和状态数值（2026-09-17 用户实测反馈）。
+var HANDLE_WIDTH = 56;
+var HANDLE_HEIGHT = 40;
+// 多久没碰控制条就自动收起。参考自动按键精灵的交互。
+var AUTO_COLLAPSE_MS = 3000;
 
 function pad(value, width) {
   var text = String(value);
@@ -113,14 +129,21 @@ function start(context, config, onStop) {
   // 控制条单独一个窗口，浮在捕获层之上。
   // 布局刻意保持简单：根节点带 id、子节点不写宽高。实测在根节点上写 w/h、
   // 在子节点上写 w 时，findView 会返回 null——尺寸交给 setSize 去管。
+  // 两个形态放在同一个窗口里，靠 visibility 切换：
+  // handle 是收起后的小把手，panel 是展开后的完整控制条。
+  // 尺寸仍然由 setSize 管，布局里一律不写 w/h（写了 findView 会返回 null）。
   var pill = floaty.rawWindow(
     [
-      '<vertical id="root" bg="#e0000000" padding="10 6">',
-      '  <text id="counter" text="已记录 0 步" textColor="#ffffff" textSize="13sp"/>',
-      '  <horizontal>',
-      '    <text id="stopButton" text="  停止  " textColor="#ff8a80" textSize="15sp"/>',
-      '    <text id="undoButton" text="  撤销  " textColor="#ffd54f" textSize="15sp"/>',
-      "  </horizontal>",
+      '<vertical id="root" bg="#e0000000">',
+      '  <text id="handle" text=" ● 录 " textColor="#ff8a80" textSize="14sp" padding="8 8"/>',
+      '  <vertical id="panel" padding="10 6">',
+      '    <text id="counter" text="已记录 0 步" textColor="#ffffff" textSize="13sp"/>',
+      '    <horizontal>',
+      '      <text id="stopButton" text=" 停止 " textColor="#ff8a80" textSize="15sp"/>',
+      '      <text id="undoButton" text=" 撤销 " textColor="#ffd54f" textSize="15sp"/>',
+      '      <text id="collapseButton" text=" 收起 " textColor="#90caf9" textSize="15sp"/>',
+      "    </horizontal>",
+      "  </vertical>",
       "</vertical>"
     ].join("\n")
   );
@@ -129,6 +152,14 @@ function start(context, config, onStop) {
   // 立刻调 setSize 会 NullPointerException。所以整套接线都推迟到定时器里做。
   // （在脚本顶层直接创建时 findView 是立刻可用的，两种时机不一样，别照搬。）
   var counterView = null;
+  var handleView = null;
+  var panelView = null;
+  // 控制条当前占多大——触摸排除区要按它算，收起后不能再排除整块 190x76，
+  // 否则左上角一大片区域永远录不到。
+  var pillWidth = PILL_WIDTH;
+  var pillHeight = PILL_HEIGHT;
+  var collapsed = false;
+  var collapseTimer = null;
 
   function refreshCounter() {
     if (!counterView) return;
@@ -137,9 +168,56 @@ function start(context, config, onStop) {
     });
   }
 
+  // ---- 控制条的展开 / 收起 ----
+  // 控制条固定在左上角，会盖住游戏的任务栏和状态数值。参考自动按键精灵的做法：
+  // 不碰它就自动缩成一个小把手，点把手再展开。
+  function applyCollapsed(next) {
+    collapsed = next;
+    pillWidth = next ? HANDLE_WIDTH : PILL_WIDTH;
+    pillHeight = next ? HANDLE_HEIGHT : PILL_HEIGHT;
+    ui.run(function () {
+      if (stopped) return;
+      if (handleView) handleView.setVisibility(next ? 0 : 8);   // 0=VISIBLE, 8=GONE
+      if (panelView) panelView.setVisibility(next ? 8 : 0);
+      pill.setSize(pillWidth, pillHeight);
+    });
+  }
+
+  function cancelCollapseTimer() {
+    if (collapseTimer !== null) {
+      clearTimeout(collapseTimer);
+      collapseTimer = null;
+    }
+  }
+
+  // 每次碰控制条都重新计时。录制点击不重置——那是在操作游戏，不该把控制条唤回来挡路。
+  function scheduleCollapse() {
+    cancelCollapseTimer();
+    collapseTimer = setTimeout(function () {
+      collapseTimer = null;
+      if (!stopped && !collapsed) applyCollapsed(true);
+    }, AUTO_COLLAPSE_MS);
+  }
+
+  // 人主动点把手展开，就**不再自动收起**——自动收只服务于「初次显示后让开位置」。
+  // 早先展开后也重排 3 秒定时器，结果是人刚展开、还没来得及点「停止」就被收走了
+  // （2026-09-17 实测：展开后隔了 3 秒多去点停止，那块已经不是控制条，
+  // 于是被当成游戏点击记成了一个节点）。
+  function expandPill() {
+    cancelCollapseTimer();
+    if (collapsed) applyCollapsed(false);
+  }
+
+  // 点计数区手动收起，给人一个明确的收回入口。
+  function collapsePill() {
+    cancelCollapseTimer();
+    if (!collapsed) applyCollapsed(true);
+  }
+
   function finish() {
     if (stopped) return;
     stopped = true;
+    cancelCollapseTimer();
     try { capture.close(); } catch (error) {}
     try { pill.close(); } catch (error) {}
     // 基线在停止这一刻定下来并随会话保存，取第一步截图的尺寸。
@@ -178,7 +256,8 @@ function start(context, config, onStop) {
     var y = event.getRawY();
 
     // 控制条区域内的触摸交给控制条，不记录也不转发。
-    if (x < PILL_WIDTH && y < PILL_HEIGHT) {
+    // 用当前尺寸而不是展开态的固定值：收起后排除区要跟着缩小。
+    if (x < pillWidth && y < pillHeight) {
       return false;
     }
 
@@ -206,12 +285,32 @@ function start(context, config, onStop) {
 
       // 转发这一下给游戏。转发期间必须让自己不可触摸，
       // 否则这一下会再次落回捕获层，形成自己点自己的死循环。
+      //
+      // **必须确认 setTouchable(false) 真的生效了再 press。** ui.run 是异步的，
+      // 早先的写法是 ui.run 之后 sleep(60) 就转发——赶在属性生效之前打出去的那一下
+      // 会落回捕获层，而 forwarding 标志正好把它吞掉：**步数照记，游戏收不到点击**
+      // （2026-09-17 用户实测「记了 4 步但游戏没反应」就是这个）。
+      // 改成在回调末尾置位、这边轮询等待，不再赌时序。
+      var touchableOff = false;
       ui.run(function () {
         capture.setTouchable(false);
+        touchableOff = true;
       });
-      sleep(60);
-      press(Math.round(x), Math.round(y), DEFAULT_TAP_DURATION_MS);
-      sleep(FORWARD_SETTLE_MS);
+      var offDeadline = Date.now() + TOUCHABLE_WAIT_MS;
+      while (!touchableOff && Date.now() < offDeadline) {
+        sleep(10);
+      }
+      if (!touchableOff) {
+        // 没等到就不要转发了：转发出去也只会被自己吞掉，
+        // 白记一个节点还让人以为游戏卡了。
+        logger.warn("捕获层未能及时让出触摸，本次点击不转发");
+      } else {
+        // 属性生效到窗口真正不再接收事件之间还有一小段，给它一拍。
+        sleep(FORWARD_GUARD_MS);
+        press(Math.round(x), Math.round(y), DEFAULT_TAP_DURATION_MS);
+        sleep(FORWARD_SETTLE_MS);
+      }
+
       ui.run(function () {
         if (!stopped) capture.setTouchable(true);
       });
@@ -230,23 +329,37 @@ function start(context, config, onStop) {
     try {
       var captureRoot = capture.findView("root");
       counterView = pill.findView("counter");
+      handleView = pill.findView("handle");
+      panelView = pill.findView("panel");
       var stopView = pill.findView("stopButton");
       var undoView = pill.findView("undoButton");
+      var collapseView = pill.findView("collapseButton");
 
       var missing = [];
       if (!captureRoot) missing.push("capture.root");
       if (!counterView) missing.push("pill.counter");
+      if (!handleView) missing.push("pill.handle");
+      if (!panelView) missing.push("pill.panel");
       if (!stopView) missing.push("pill.stopButton");
       if (!undoView) missing.push("pill.undoButton");
+      if (!collapseView) missing.push("pill.collapseButton");
       if (missing.length > 0) {
         throw new Error("控件未找到: " + missing.join(", "));
       }
 
       stopView.setOnClickListener(function () {
+        cancelCollapseTimer();
         finish();
       });
       undoView.setOnClickListener(function () {
         undo();
+      });
+      // 收起态的小把手：点一下展开，之后不再自动收起。
+      handleView.setOnClickListener(function () {
+        expandPill();
+      });
+      collapseView.setOnClickListener(function () {
+        collapsePill();
       });
       captureRoot.setOnTouchListener(onCaptureTouch);
 
@@ -255,6 +368,10 @@ function start(context, config, onStop) {
       pill.setSize(PILL_WIDTH, PILL_HEIGHT);
       pill.setPosition(0, 0);
       pill.setTouchable(true);
+      // 初始展开，让人看见录制已开始；3 秒没碰就自己缩回去。
+      handleView.setVisibility(8);
+      panelView.setVisibility(0);
+      scheduleCollapse();
 
       logger.info("录制悬浮层就绪，会话目录: " + session.dir);
       toast("录制已开始");
