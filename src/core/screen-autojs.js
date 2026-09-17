@@ -132,18 +132,25 @@ function create(options) {
     );
   }
 
-  // AutoJs6 默认用图像金字塔加速匹配，但小模板在粗层被 weakThreshold 剪枝后会直接丢失，
-  // 表现为任何阈值都匹配不到——连从截图自身裁下来的图块都找不回来（实测 70x70 必现，
-  // 300x100 正常）。level 为 1 表示不做金字塔，慢一些但结果可靠。
-  var PYRAMID_SAFE_MIN_EDGE = 120;
-
+  // level 是图像金字塔层数：0 表示完全不降采样、按原分辨率匹配，最慢但最可靠。
+  // 默认走金字塔加速，小模板在粗层被剪枝后会直接丢失，表现为任何阈值都匹配不到。
+  //
+  // 2026-09-17 在主城画面上实测（同一张固化截图，findImage）：
+  //
+  //     自裁块 120x36        level 0 命中 / level 1 未命中 / 默认未命中
+  //     btn-boss-feast 58x40 level 0 命中 / level 1 命中   / 默认命中
+  //
+  // 也就是说 level 1 **不是**总会失效，但 level 0 在实测里从没比它差过。
+  // 漏匹配是静默的（任务照跑，只是永远找不到），排查成本远高于多花的那点匹配时间，
+  // 而本项目的锚点都是人手框的小图块（实测 58x40 到 210x65），不降采样的耗时可以忽略。
+  // 所以默认一律 level: 0；调用方显式传了 level 就尊重调用方。
+  //
+  // 注意：这条只解决「同一张图能不能被找到」。锚点本身过期（界面改版、背景变了）
+  // 是另一回事，任何 level 都救不回来，只能重新人工框选。
   function withMatchDefaults(template, findOptions) {
     var options = findOptions || {};
     if (options.level === undefined) {
-      var minEdge = Math.min(template.getWidth(), template.getHeight());
-      if (minEdge < PYRAMID_SAFE_MIN_EDGE) {
-        options.level = 1;
-      }
+      options.level = 0;
     }
     return options;
   }
