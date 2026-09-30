@@ -61,7 +61,9 @@ check / build 也过；rxfs 那两个纯数据探针（用例校验、类型互�
 ## 当前状态
 
 **开发分支**：`test`　**稳定分支**：`main`（不直接提交，由 `test` 验证通过后合入）  
-**最近一次 release / tag**：`v0.1.0`，已推送到 origin  
+**最近一次 release / tag**：`v0.3.0`（2026-09-30，回流 rxfs v0.12.0 的回放与录制内核），已推送到 origin  
+（这一行以前写着 `v0.1.0`，而 `main` 上早已是 `v0.2.0` —— 发版时顺手改它，
+`package.json` 的 `version` 也跟着走，别再留一个说不清版本的仓库）  
 **进行中**：通用模板六轮迭代完成，JSON 用例引擎已回流，打包成独立 APK 的链路已通。
 **2026-09-15 回流自 rxfs**：录制器框锚点 / 生成用例 / 回放（`case/recorded-case-autojs.js`、
 用例 `assetBase: "case"`），以及切前台修复（`foreground-autojs.js`：UI 模式下
