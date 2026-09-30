@@ -83,6 +83,26 @@ function checkpoint(logger) {
   if (logger) logger.info("任务继续");
 }
 
+// 可被暂停/终止打断的等待。切成 500 毫秒一段，每段之间过一次检查点。
+// 粒度取 500：再细意义不大（人感知不到），再粗按下终止要等太久。
+//
+// **凡是要等超过一两秒的地方都得用它，别用裸 sleep。**
+// 裸 sleep 期间「终止」按钮按了也没用——标志置上了，但没人去看。
+// 2026-09-18 实测：常驻调度两次 tick 之间是 sleep(60000)，循环里又没有检查点，
+// 结果点了终止界面显示「正在终止」却一直停不下来，只能 kill 掉整个 App。
+// 越是长命的循环越要守这条。
+function sleepInterruptibly(totalMs, logger) {
+  var sliceMs = 500;
+  var remaining = totalMs;
+  while (remaining > 0) {
+    checkpoint(logger);
+    var step = remaining < sliceMs ? remaining : sliceMs;
+    sleep(step);
+    remaining -= step;
+  }
+  checkpoint(logger);
+}
+
 module.exports = {
   PAUSE_POLL_MS: PAUSE_POLL_MS,
   reset: reset,
@@ -92,5 +112,6 @@ module.exports = {
   isPaused: isPaused,
   isStopRequested: isStopRequested,
   state: state,
-  checkpoint: checkpoint
+  checkpoint: checkpoint,
+  sleepInterruptibly: sleepInterruptibly
 };

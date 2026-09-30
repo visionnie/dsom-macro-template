@@ -2,7 +2,9 @@
 // 通用能力：读取 JSON 用例、验证、按节点图执行
 // 设计约束：
 //   - 用例数据是明文 JSON。用户是数据所有者：可读、可改、可 diff、可 git 管理
-//   - MVP 只支持三种节点类型：noop / tap / tapImage
+//   - 支持五种节点类型：noop / tap / tapImage / longTap / swipe
+//     （2026-09-30 加了后两种：录制器原先只录点击，那是人工录制表达力的硬上限。
+//      找图只与点击组合——"找到图再滑一道"没有真实需求，加了反而多一个要验的分支）
 //   - 节点跳转：@next 顺序、@end 结束成功、@abort 结束失败、或跳到具体节点 id
 //   - 循环有明确访问上限：全局 maxNodeVisits 兜底，单节点可配 maxVisits + onExhausted
 //   - 屏幕方向必须与 baseline 方向一致（有上限地等待），方向本身不做换算
@@ -27,8 +29,17 @@ var DEFAULT_TAP_IMAGE_THRESHOLD = 0.85;
 var DEFAULT_TAP_IMAGE_PRE_TAP_MS = 400;
 var DEFAULT_ORIENTATION_WAIT_MS = 20000;
 var DEFAULT_ORIENTATION_POLL_MS = 1000;
+// 长按与滑动的缺省时长，以及允许写进用例的范围。
+// 下限不设 0：0 毫秒的 press 就是一次普通点击，而节点写着"长按"，
+// 那种"报绿却没做成事"的失效是这套东西最危险的一类。
+var DEFAULT_LONG_PRESS_MS = 800;
+var MIN_LONG_PRESS_MS = 200;
+var MAX_LONG_PRESS_MS = 10000;
+var DEFAULT_SWIPE_DURATION_MS = 300;
+var MIN_SWIPE_DURATION_MS = 60;
+var MAX_SWIPE_DURATION_MS = 10000;
 
-var VALID_TYPES = { noop: true, tap: true, tapImage: true };
+var VALID_TYPES = { noop: true, tap: true, tapImage: true, longTap: true, swipe: true };
 var TERMINAL_TARGETS = { "@next": true, "@end": true, "@abort": true };
 
 function isArray(value) {
@@ -167,9 +178,55 @@ function validateCase(data) {
 }
 
 function validateNodeParams(node) {
+  // 节点级 baseline：这一步录制时屏幕是多大。录制横跨屏幕方向时才会出现
+  // （盒子竖屏点进游戏 -> 游戏横屏），只写在与用例 baseline 不同的那些步骤上。
+  if (node.baseline != null) {
+    if (!isNumber(node.baseline.width) || !isNumber(node.baseline.height)) {
+      throw new Error("节点 [" + node.id + "] 的 baseline 必须包含 width 与 height");
+    }
+  }
+  // 这一步等方向的上限。只给转屏那些步骤挂长等待，别的步骤用默认值。
+  if (node.orientationWaitMs != null && !isNumber(node.orientationWaitMs)) {
+    throw new Error("节点 [" + node.id + "] 的 orientationWaitMs 必须是数字");
+  }
   if (node.type === "tap") {
     if (!isRatio(node.rx) || !isRatio(node.ry)) {
       throw new Error("tap 节点 [" + node.id + "] 缺少或非法 rx/ry（0 到 1）");
+    }
+    return;
+  }
+  if (node.type === "longTap") {
+    if (!isRatio(node.rx) || !isRatio(node.ry)) {
+      throw new Error("longTap 节点 [" + node.id + "] 缺少或非法 rx/ry（0 到 1）");
+    }
+    if (node.pressMs != null &&
+        (!isNumber(node.pressMs) ||
+          node.pressMs < MIN_LONG_PRESS_MS ||
+          node.pressMs > MAX_LONG_PRESS_MS)) {
+      throw new Error(
+        "longTap 节点 [" + node.id + "] 的 pressMs 必须是 " +
+          MIN_LONG_PRESS_MS + " 到 " + MAX_LONG_PRESS_MS + " 之间的毫秒数"
+      );
+    }
+    return;
+  }
+  if (node.type === "swipe") {
+    // 起点沿用 rx/ry，终点是 rx2/ry2。起点同名不是偷懒：取点、红十字、
+    // 坐标空间换算那几条路都按 rx/ry 取"这一步落在哪儿"，换个名字就得各改一遍。
+    if (!isRatio(node.rx) || !isRatio(node.ry)) {
+      throw new Error("swipe 节点 [" + node.id + "] 缺少或非法起点 rx/ry（0 到 1）");
+    }
+    if (!isRatio(node.rx2) || !isRatio(node.ry2)) {
+      throw new Error("swipe 节点 [" + node.id + "] 缺少或非法终点 rx2/ry2（0 到 1）");
+    }
+    if (node.durationMs != null &&
+        (!isNumber(node.durationMs) ||
+          node.durationMs < MIN_SWIPE_DURATION_MS ||
+          node.durationMs > MAX_SWIPE_DURATION_MS)) {
+      throw new Error(
+        "swipe 节点 [" + node.id + "] 的 durationMs 必须是 " +
+          MIN_SWIPE_DURATION_MS + " 到 " + MAX_SWIPE_DURATION_MS + " 之间的毫秒数"
+      );
     }
     return;
   }
@@ -227,20 +284,13 @@ function runCase(context, caseData, options) {
   var idToIndex = {};
   for (var i = 0; i < nodes.length; i++) idToIndex[nodes[i].id] = i;
 
-  // baseline 方向必须与设备方向一致：都竖屏或都横屏，MVP 不做换算。
-  // 不一致会让归一化坐标 * device.width 得到荒唐位置，所以必须拦住。
-  //
-  // 但这里不能一锤子判断：屏幕方向跟随前台应用而变，而游戏被拉起后要过若干秒
-  // 才真正转成横屏。实测拿到截图授权、把游戏拉回前台后仅 6 秒就跑用例，
-  // 此时设备仍报竖屏，用例直接失败——失败的是时序，不是用例本身。
-  // 因此改为有上限的轮询等待，超时才抛错。
-  if (caseData.baseline) {
-    waitForOrientation(context, caseData);
-  }
-
-  // 分辨率换算。baseline 与设备同尺寸时 scale=1、offset=0，是恒等映射，
-  // 因此在录制设备上跑的结果与换算前完全一致；换到别的分辨率才真正生效。
-  var viewport = createCaseViewport(context, caseData);
+  // 方向断言与坐标换算都**按节点做**，不是整条用例做一次。
+  // 因为一条用例可以横跨屏幕方向：盒子里是竖屏，点「进入游戏」之后才转横屏，
+  // 而录登录流程必然横跨这一下。每一步的 rx/ry 都是按它自己那一刻的屏幕尺寸
+  // 归一化的，所以换算也必须按步来。没写节点 baseline 的步骤退回用例 baseline，
+  // 于是单一方向的老用例行为完全不变——只是那一次检查从"开跑前一次"
+  // 变成了"每一步一次"，中途被转屏了也能立刻拦住，而不是静默点偏。
+  var viewportCache = {};
 
   var currentIndex = 0;
   if (caseData.entry) {
@@ -317,6 +367,17 @@ function runCase(context, caseData, options) {
       });
     }
 
+    // 方向等待放在 try 外面：等不到是环境问题（游戏没起来、没转屏），
+    // 必须原样抛成 broken。放进 try 里会被 onFail 当成业务失败改道，
+    // 而 onFail 的语义是"这一步没找到东西"，不是"设备不对劲"。
+    // 先等方向、再建 viewport：device 的宽高随转屏一起变，
+    // 顺序反了就会拿转屏前的尺寸去换算，每一步都点偏。
+    var nodeBaseline = node.baseline || caseData.baseline;
+    if (nodeBaseline) {
+      waitForOrientation(context, caseData, nodeBaseline, node);
+    }
+    var nodeViewport = viewportFor(context, caseData, nodeBaseline, viewportCache);
+
     var startedAt = Date.now();
     var target;
     var stepResult = {
@@ -325,7 +386,7 @@ function runCase(context, caseData, options) {
       type: node.type
     };
     try {
-      executeNode(context, node, viewport);
+      executeNode(context, node, nodeViewport);
       stepResult.status = "passed";
       stepResult.durationMs = Date.now() - startedAt;
       results.push(stepResult);
@@ -359,16 +420,44 @@ function runCase(context, caseData, options) {
   }
 }
 
+// 只执行一个节点，供单步调试用（STEP-DEBUG.md）。
+// 与整条跑共用同一套方向断言和坐标换算——调试时的行为必须和真跑一模一样，
+// 否则"单步验过了、整条还是错"，调试就失去意义。
+// **不产出 result.json、不进运行记录**：这是调试动作，不是一次任务运行。
+// options.caseDir：assetBase 为 case 时必填；options.orientationWaitMs：方向等待上限。
+function runSingleNode(context, caseData, node, options) {
+  var opts = options || {};
+  var scoped = withCaseAssets(context, caseData, opts);
+  var baseline = node.baseline || caseData.baseline;
+  if (baseline) {
+    // 调试时方向不对要立刻说，不要像正式跑那样等 90 秒——人就在设备前面看着。
+    var probe = {
+      orientationWaitMs: opts.orientationWaitMs != null ? opts.orientationWaitMs : 3000,
+      orientationPollMs: 500
+    };
+    waitForOrientation(scoped, probe, baseline, node);
+  }
+  var viewport = viewportFor(scoped, caseData, baseline, {});
+  executeNode(scoped, node, viewport);
+}
+
 // device.width / device.height 是实时的：它们随前台应用的屏幕方向变化。
 // 依据是 screen-autojs.js 的硬断言——截图尺寸与 device 尺寸不一致就抛错，
 // 而横屏游戏里的用例能连续跑通，说明两者是一起变的。所以轮询它们有效。
-function waitForOrientation(context, caseData) {
-  var baseline = caseData.baseline;
+//
+// baseline 是**这一步**的基线（节点自己的，或退回用例的）；node 只用于报错时
+// 说清是卡在哪一步，转屏发生在第几步一眼能看出来。
+function waitForOrientation(context, caseData, baseline, node) {
   var baselineIsLandscape = baseline.width > baseline.height;
+  var where = node ? "节点 [" + node.id + "] " + node.name : "用例";
+  // 等待上限逐步骤给：转屏那一步要等游戏加载完（录制器给它挂 90 秒），
+  // 而别的步骤没理由陪着等那么久——起点不对时要尽快报出来。
   var waitMs =
-    caseData.orientationWaitMs != null
-      ? caseData.orientationWaitMs
-      : DEFAULT_ORIENTATION_WAIT_MS;
+    node && node.orientationWaitMs != null
+      ? node.orientationWaitMs
+      : caseData.orientationWaitMs != null
+        ? caseData.orientationWaitMs
+        : DEFAULT_ORIENTATION_WAIT_MS;
   var pollMs =
     caseData.orientationPollMs != null
       ? caseData.orientationPollMs
@@ -384,8 +473,13 @@ function waitForOrientation(context, caseData) {
   if (matched()) return;
 
   context.logger.info(
-    "等待屏幕转到 baseline 方向（" +
+    where +
+      " 等待屏幕转到 " +
       (baselineIsLandscape ? "横屏" : "竖屏") +
+      "（基线 " +
+      baseline.width +
+      "x" +
+      baseline.height +
       "），当前 " +
       describe() +
       "，上限 " +
@@ -401,27 +495,42 @@ function waitForOrientation(context, caseData) {
     if (Date.now() >= deadline) {
       // 方向不对是环境/时序问题（游戏没起来或没转屏），不是用例写错，算 broken。
       throw errors.broken(
-        "等待 " +
+        where +
+          "：等待 " +
           waitMs +
-          " 毫秒后屏幕方向仍与 baseline 不一致：baseline " +
+          " 毫秒后屏幕方向仍与基线不一致，基线 " +
           baseline.width +
           "x" +
           baseline.height +
           "，设备 " +
           describe() +
-          "。MVP 不做方向换算，请确认目标应用已进入并完成旋转"
+          "。方向本身不做换算，请确认目标应用已进入并完成旋转"
       );
     }
     sleep(pollMs);
   }
-  context.logger.info("屏幕方向已匹配 baseline: " + describe());
+  context.logger.info(where + " 的屏幕方向已就位: " + describe());
+}
+
+// 取这一步要用的 viewport，按「基线尺寸 @ 当前设备尺寸」缓存。
+// 必须带上设备尺寸做键：转屏之后设备宽高换了个个儿，同一个基线也要换一份换算。
+function viewportFor(context, caseData, baseline, cache) {
+  var effective = baseline || { width: device.width, height: device.height };
+  var key = effective.width + "x" + effective.height + "@" + device.width + "x" + device.height;
+  if (!cache[key]) {
+    cache[key] = createCaseViewport(context, caseData, effective);
+  }
+  return cache[key];
 }
 
 // baseline 缺省时用设备自身当基线，得到恒等映射——没写 baseline 的用例行为不变。
-function createCaseViewport(context, caseData) {
-  var baseline = caseData.baseline
-    ? { width: caseData.baseline.width, height: caseData.baseline.height,
-        scaleStrategy: caseData.baseline.scaleStrategy }
+function createCaseViewport(context, caseData, sourceBaseline) {
+  var from = sourceBaseline || caseData.baseline;
+  var baseline = from
+    ? { width: from.width, height: from.height,
+        // scaleStrategy 只在用例级 baseline 上给，节点级 baseline 只带尺寸。
+        scaleStrategy: from.scaleStrategy ||
+          (caseData.baseline ? caseData.baseline.scaleStrategy : undefined) }
     : { width: device.width, height: device.height };
 
   var viewport = geometry.createViewport(baseline, device.width, device.height);
@@ -443,6 +552,8 @@ function executeNode(context, node, viewport) {
   if (node.type === "noop") return;
   if (node.type === "tap") return executeTap(context, node, viewport);
   if (node.type === "tapImage") return executeTapImage(context, node, viewport);
+  if (node.type === "longTap") return executeLongTap(context, node, viewport);
+  if (node.type === "swipe") return executeSwipe(context, node, viewport);
   throw new Error("未知节点类型: " + node.type);
 }
 
@@ -452,6 +563,37 @@ function executeTap(context, node, viewport) {
     viewport
   );
   context.actions.tap(point, node.postWaitMs);
+}
+
+function executeLongTap(context, node, viewport) {
+  var point = geometry.resolvePoint(
+    { rx: node.rx, ry: node.ry, name: node.name || node.rx + "," + node.ry },
+    viewport
+  );
+  context.actions.longPress(
+    point,
+    node.pressMs != null ? node.pressMs : DEFAULT_LONG_PRESS_MS,
+    node.postWaitMs
+  );
+}
+
+// 起点与终点各自换算：两端都要落在设备内，越界由 resolvePoint 当场抛，
+// 绝不静默夹到屏幕边上——夹出来的那一道滑动方向对了距离不对，看着像做成了。
+function executeSwipe(context, node, viewport) {
+  var name = node.name || "滑动";
+  var from = geometry.resolvePoint({ rx: node.rx, ry: node.ry, name: name + "起点" }, viewport);
+  var to = geometry.resolvePoint({ rx: node.rx2, ry: node.ry2, name: name + "终点" }, viewport);
+  context.actions.drag(
+    {
+      name: name,
+      x1: from.x,
+      y1: from.y,
+      x2: to.x,
+      y2: to.y,
+      durationMs: node.durationMs != null ? node.durationMs : DEFAULT_SWIPE_DURATION_MS
+    },
+    node.postWaitMs
+  );
 }
 
 function executeTapImage(context, node, viewport) {
@@ -501,7 +643,18 @@ function executeTapImage(context, node, viewport) {
 module.exports = {
   CASE_MODEL: CASE_MODEL,
   SCHEMA_VERSION: SCHEMA_VERSION,
+  // 长按时长与滑动时长的缺省值和边界。**校验器是唯一权威**，编辑器按它夹，
+  // 两边各写一份的话，界面允许的值会有一天被校验器拒绝，而人只看得到"保存失败"。
+  GESTURE: {
+    defaultPressMs: DEFAULT_LONG_PRESS_MS,
+    minPressMs: MIN_LONG_PRESS_MS,
+    maxPressMs: MAX_LONG_PRESS_MS,
+    defaultSwipeMs: DEFAULT_SWIPE_DURATION_MS,
+    minSwipeMs: MIN_SWIPE_DURATION_MS,
+    maxSwipeMs: MAX_SWIPE_DURATION_MS
+  },
   loadCase: loadCase,
   validateCase: validateCase,
-  runCase: runCase
+  runCase: runCase,
+  runSingleNode: runSingleNode
 };

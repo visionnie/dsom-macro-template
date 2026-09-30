@@ -54,6 +54,14 @@ const genericPaths = [
   "src/core/recorded-task-autojs.js",
   "src/core/recorder-autojs.js",
   "src/core/ocr-autojs.js",
+  // 2026-09-30 回流带进来的五个通用件。**加了 core 文件就要加进这份清单**——
+  // 漏一个的后果是生成出来的新项目跑到那句 require 才炸，
+  // 而模板自己一切正常（menu-autojs.js 漏掉那次就是这么发现的）。
+  "src/core/ui-thread-autojs.js",
+  "src/core/screen-overlays-autojs.js",
+  "src/core/tap-marker-autojs.js",
+  "src/core/point-picker-autojs.js",
+  "src/core/region-picker-autojs.js",
   "src/core/resident-autojs.js",
   "src/core/run-control-autojs.js",
   "src/core/run-lock-autojs.js",

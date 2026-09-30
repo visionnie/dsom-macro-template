@@ -17,7 +17,11 @@ function create(options) {
   var logger = options.logger;
   var outputDir = options.outputDir;
   var captureConfig = options.capture || {};
-  var captureSpaceChecked = false;
+  // 记的是"在哪个屏幕尺寸下验过"，不是"验过没有"。
+  // 一条用例可以横跨屏幕方向（盒子竖屏点进游戏 -> 游戏横屏），只验一次的话，
+  // 转屏之后画布还是授权那一刻的旧方向，而检查已经被标记做过了——
+  // 于是找图在一张对不上的画布里进行，静默点偏，正是这个断言本来要拦的事。
+  var captureSpaceCheckedFor = null;
 
   function requestPermission() {
     captureSession.request(logger, captureConfig);
@@ -26,10 +30,10 @@ function create(options) {
   // 截图空间必须与点击坐标空间一致，否则找图得到的坐标直接拿去点击会系统性偏移，
   // 而且偏移是静默的：任务照常执行，只是每一步都点在错误的位置。首次截图时校验一次。
   function assertCaptureSpace(image) {
-    if (captureSpaceChecked) {
+    var screenSize = device.width + "x" + device.height;
+    if (captureSpaceCheckedFor === screenSize) {
       return;
     }
-    captureSpaceChecked = true;
 
     var imageWidth = image.getWidth();
     var imageHeight = image.getHeight();
@@ -54,6 +58,7 @@ function create(options) {
           "。多为授权后屏幕转向所致，已作废截图会话，下次运行会重新申请"
       );
     }
+    captureSpaceCheckedFor = screenSize;
     logger.info("截图坐标空间一致: " + imageWidth + "x" + imageHeight);
   }
 
@@ -65,7 +70,17 @@ function create(options) {
 
   function withCapture(callback) {
     ensurePermission();
-    var image = captureScreen();
+    // 常驻的悬浮层（运行控制条）先让开：截图会把它们一起拍进去，
+    // 压住找图锚点时找图会稳定超时，而日志里只有一句"等待条件超时"。
+    var overlays = require("./screen-overlays-autojs.js");
+    var hidden = false;
+    var image;
+    try {
+      hidden = overlays.hideForCapture();
+      image = captureScreen();
+    } finally {
+      if (hidden) overlays.restoreAfterCapture();
+    }
     try {
       assertCaptureSpace(image);
       return callback(image);
