@@ -3,6 +3,8 @@
 // 设计约束：任务只描述步骤，流程控制不绑定任何界面或具体游戏
 // =====================================================================
 
+var control = require("./run-control-autojs.js");
+
 function runSteps(context, steps) {
   var results = [];
 
@@ -11,6 +13,21 @@ function runSteps(context, steps) {
     var retryCount = step.retryCount || 0;
     var attempt = 0;
     var completed = false;
+
+    // 步骤之间的暂停/终止检查点。步骤内部的长等待另有检查点
+    // （actions.waitUntil / screen.waitFor），两层加起来才跟手。
+    control.checkpoint(context.logger);
+    // 进度上报给界面。JSON 用例走 case-runner 上报，手写 JS 任务走这里——
+    // 少了这一处，从任务列表跑 login-rxfs 时状态条只有「正在运行」没有第几步。
+    if (context.progress) {
+      context.progress.report({
+        index: index + 1,
+        total: steps.length,
+        id: step.id || step.name,
+        name: step.name,
+        type: "step"
+      });
+    }
 
     while (!completed && attempt <= retryCount) {
       attempt++;

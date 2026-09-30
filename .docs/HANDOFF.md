@@ -3,13 +3,67 @@
 ## 下次启动，第一件事
 
 ```text
-先修复 OCR 接口与失败步骤留存；配置 Git 提交者身份后创建首次基线提交。
+2026-09-30 从 rxfs 回流了「回放与录制内核」，但**界面层还是老的**（见下）。
+下一件要么是补完界面层回流（B 轮：launcher / runtime / 三个浮层 / 任务列表），
+要么等真要接第二个游戏时再动——那时才知道那个游戏的界面该长什么样。
+
+回流完这一轮之后，模板与 rxfs 的 src/core 还差 8 个文件（见下方清单）。
 ```
+
+## 2026-09-30 回流自 rxfs：回放与录制内核（A 轮）
+
+rxfs 侧已发版 v0.12.0 并由项目所有者实机验收通过，按规矩才回流。
+**只回流了跟游戏无关、且不依赖 launcher 的那部分。**
+
+**进来了**（更新 6 个 + 新增 5 个）：
+
+| 文件 | 带进来什么 |
+|---|---|
+| `case/case-runner-autojs.js` | 节点类型加 `longTap` / `swipe`，含时长与终点的边界校验 |
+| `case/recorded-case-autojs.js` | 手势节点的生成与还原、整道滑动平移、`nextNodeId`、默认名带动作词 |
+| `recorder-autojs.js` | 按「按下到抬手」判动作（点击 / 长按 / 滑动）、转发跟着动作走、补录单个动作 `captureOneGesture`、截图按节点 id 取名 |
+| `actions-autojs.js` | `longPress` 新增；`drag` 补上与 `tap` 同一道护栏（悬浮层让开、红十字、扣等待） |
+| `run-control-autojs.js` | `sleepInterruptibly`（长循环要能被中断） |
+| `screen-autojs.js` | 截图前让开已登记的悬浮层 |
+| **新增** `ui-thread-autojs.js` | 从工作线程派事给界面线程并等它做完 |
+| **新增** `screen-overlays-autojs.js` | 悬浮层登记表：截图/点击前统一让开 |
+| **新增** `tap-marker-autojs.js` | 点击红十字（注入的点击在屏幕上看不见） |
+| **新增** `point-picker-autojs.js` | 在真实画面上拖十字取一个点 |
+| **新增** `region-picker-autojs.js` | 在真实画面上框一块区域 |
+
+`create-game-project.js` 的拷贝清单已同步补上这 5 个新文件，并**实际生成了一个项目
+验过 check 与 build**（这份清单漏文件的后果是新项目跑到那句 require 才炸，
+而模板自己一切正常——`menu-autojs.js` 那次就是这么发现的）。
+
+**故意没进来**（都强依赖 launcher，没有它们只是死代码）：
+
+```text
+launcher-autojs.js       rxfs 已长到 3742 行，游戏语义与通用界面混着，要拆
+runtime-autojs.js        前置补跑、截图会话那一套
+recorded-task-autojs.js  recorded:<会话 id> 的解析与任务包装
+task-store / task-group-store / task-group    任务列表与组合任务
+step-overlay / run-overlay / pick-overlay     游戏内编辑层、运行待命层、切任务浮层
+app-version-autojs.js    版本可见机制（还要配两个构建脚本）
+resident / schedule-store / permissions       只差几行到几十行
+```
+
+`point-picker` 与 `region-picker` 进来了但**当前没有调用方**，所以不会进 bundle
+（bundler 按 require 走）。它们是给 B 轮的 launcher 准备的现货。
+
+**注意一处行为变化**：新录制器起手是**待命态**（浮出「▶ 开始录制」，人点一下才开始记），
+而模板这套老 launcher 的文案可能还按「点了就开始录」写。B 轮一并改。
+
+**验到哪儿**：`npm run check` / `npm run build` 过；生成一个新项目后它自己的
+check / build 也过；rxfs 那两个纯数据探针（用例校验、类型互转、插入重排、
+识别边界）指向模板这份内核跑，同样全过。**模板侧没有实机验证**——
+真机证据全部来自 rxfs v0.12.0。
 
 ## 当前状态
 
 **开发分支**：`test`　**稳定分支**：`main`（不直接提交，由 `test` 验证通过后合入）  
-**最近一次 release / tag**：`v0.1.0`，已推送到 origin  
+**最近一次 release / tag**：`v0.3.0`（2026-09-30，回流 rxfs v0.12.0 的回放与录制内核），已推送到 origin  
+（这一行以前写着 `v0.1.0`，而 `main` 上早已是 `v0.2.0` —— 发版时顺手改它，
+`package.json` 的 `version` 也跟着走，别再留一个说不清版本的仓库）  
 **进行中**：通用模板六轮迭代完成，JSON 用例引擎已回流，打包成独立 APK 的链路已通。
 **2026-09-15 回流自 rxfs**：录制器框锚点 / 生成用例 / 回放（`case/recorded-case-autojs.js`、
 用例 `assetBase: "case"`），以及切前台修复（`foreground-autojs.js`：UI 模式下
