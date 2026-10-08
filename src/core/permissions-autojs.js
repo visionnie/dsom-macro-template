@@ -100,7 +100,8 @@ function list() {
       required: false,
       status: overlayEnabled(),
       openable: true,
-      detail: "录制用例时的捕获层要用。只跑已有用例可以不开。"
+      detail: "录制用例的捕获层要用；回放时点击位置闪的红十字也要用。" +
+        "不开则录不了，回放照跑但看不见点在哪。"
     },
     {
       key: "battery",

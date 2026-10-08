@@ -163,6 +163,44 @@ function create(options) {
     settle(waitMs, outcome.finishedAt);
   }
 
+  // 连续点击：同一个位置连点若干下（2026-10-04 用户要求，参照自动按键精灵的「连续点击」）。
+  //
+  // **整串共用一次悬浮层让路**，不是每下都让一次：让路要走 ui.run 投递，
+  // 每点一下让一次的话，连点 50 下就是 50 次窗口尺寸来回，又慢又闪，
+  // 而中途那些让路的间隙正好会让悬浮层把点击吃掉——等于连点变成了"有时点得到"。
+  //
+  // 中途失败不继续：第 3 下没点出去还接着点第 4 下，结果是"少点了几下"，
+  // 而日志里一切正常——这正是本项目最危险的那类失效。
+  function multiTap(point, options) {
+    var opts = options || {};
+    assertCoordinate(point.x, point.y, point.name);
+    var pointName = point.name || point.x + "," + point.y;
+    var count = Math.max(1, Math.round(opts.count || 1));
+    var pressMs = Math.max(1, Math.round(opts.pressMs || tapDurationMs));
+    var intervalMs = Math.max(0, Math.round(opts.intervalMs == null ? 100 : opts.intervalMs));
+    logger.info(
+      "连续点击 " + pointName + " (" + point.x + "," + point.y + ") " +
+        count + " 次，按下 " + pressMs + " 毫秒，间隔 " + intervalMs + " 毫秒"
+    );
+
+    var done = 0;
+    var outcome = withGestureGuard(point.x, point.y, function () {
+      for (var i = 0; i < count; i++) {
+        var ok = press(point.x, point.y, pressMs);
+        if (!ok) return false;
+        done++;
+        // 最后一下后面不用再等间隔：那段等待属于"两下之间"，
+        // 挂在末尾只会让每一步白白多等一个间隔。
+        if (i < count - 1 && intervalMs > 0) sleep(intervalMs);
+      }
+      return true;
+    });
+    if (!outcome.succeeded) {
+      throw new Error("连续点击失败: " + pointName + "，已点 " + done + "/" + count + " 次");
+    }
+    settle(opts.waitMs, outcome.finishedAt);
+  }
+
   // 目标应用的进程在不在。返回 true / false / null（查不出来）。
   //
   // 为什么要知道这个：拉起应用后要干等 launchSettleMs（本机 25 秒）才敢申请截图权限，
@@ -392,6 +430,7 @@ function create(options) {
     tap: tap,
     drag: drag,
     longPress: longPress,
+    multiTap: multiTap,
     isPackageRunning: isPackageRunning,
     foregroundPackage: foregroundPackage,
     launchPackage: launchPackage,

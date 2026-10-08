@@ -704,7 +704,11 @@ function describeRecordedNode(node, shot) {
     parts.push("坐标 (" + shot.x + "," + shot.y + ")");
   }
   if (shot) parts.push(shot.deviceWidth + "x" + shot.deviceHeight);
-  if (node.postWaitMs) parts.push("停顿 " + node.postWaitMs + "ms");
+  // 等待语义 2026-10-01 起记在**动作之前**（`preWaitMs`）：这一步要等多久，
+  // 等的是"做它之前"。老会话身上的 `postWaitMs` 按老语义继续跑，所以两个都显示，
+  // 各自标清楚是哪一种——只显示新的，老录制在这一页上就成了"一个停顿都没有"。
+  if (node.preWaitMs) parts.push("先等 " + node.preWaitMs + "ms");
+  if (node.postWaitMs) parts.push("做完等 " + node.postWaitMs + "ms");
   return parts.join("　");
 }
 

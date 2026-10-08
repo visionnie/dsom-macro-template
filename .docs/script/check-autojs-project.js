@@ -38,6 +38,94 @@ function checkSyntax(filePath) {
   }
 }
 
+// 模块别名用在了没有 require 它的函数里 —— 这一类错 `node --check` 查不出来，
+// 要等人点到那个界面才炸。
+//
+// 2026-10-01 真实事故：给 launcher 的两处加 `recordedCase.usesImage(...)` 时，
+// 那两个函数（`collectUserTasks` / `renderRecordingReview`）自己没 require 过它，
+// 于是**任务列表整页变成「打不开这条录制: "recordedCase" 未定义」**，
+// 而 check / build / 五个纯数据探针全是绿的。
+//
+// 做法粗但正好卡住这一类：先收集本文件里所有 `var X = require(...)` 的别名，
+// 再看每个 `X.` 的用法所在的顶层函数里（或模块级）有没有声明过它。
+// 顶层函数的边界用 /^function 认——本项目所有文件都是这个写法；
+// 嵌套函数继承外层声明，所以按"最近的顶层函数"算作用域是对的。
+//
+// **已知盲点**：声明写在嵌套函数（回调）里时，这里也会算成"外层有"，于是放过。
+// 2026-10-01 那次事故的两处，它只报得出其中一处（另一处的 require 恰好写在某个
+// 点击回调里）。要补得做真正的作用域分析，代价不值；**宁可少报也别乱报**——
+// 一个天天喊狼来了的检查，最后谁都不看。
+// 自验方式：把 launcher 顶上那行 `var recordedCase = require(...)` 临时删掉，
+// `npm run check` 必须报 `collectUserTasks`。（2026-10-01 这么验过。）
+function checkRequireScopes(filePath) {
+  const source = fs.readFileSync(filePath, "utf8");
+  const lines = source.split("\n");
+  const requirePattern = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*require\(/;
+  const aliases = new Set();
+  for (const line of lines) {
+    const matched = requirePattern.exec(line);
+    if (matched) aliases.add(matched[1]);
+  }
+  if (aliases.size === 0) return [];
+
+  // 一个名字在别处是模块别名，在这个函数里完全可以是普通局部变量或参数
+  // （本项目里 registry / entries / removed 都是这样）。所以作用域要连
+  // **var 声明和函数参数**一起收，只收 require 的话会报一堆假阳性。
+  function declaredNames(text) {
+    const names = new Set();
+    let matched;
+    const varPattern = /\bvar\s+([A-Za-z_$][\w$]*)/g;
+    while ((matched = varPattern.exec(text)) !== null) names.add(matched[1]);
+    const namedFunctionPattern = /\bfunction\s+([A-Za-z_$][\w$]*)/g;
+    while ((matched = namedFunctionPattern.exec(text)) !== null) names.add(matched[1]);
+    // 任意函数（含回调）的参数：回调参数同样能遮住外层的同名别名。
+    const paramsPattern = /\bfunction\s*[A-Za-z_$\w]*\s*\(([^)]*)\)/g;
+    while ((matched = paramsPattern.exec(text)) !== null) {
+      for (const raw of matched[1].split(",")) {
+        const name = raw.trim();
+        if (name) names.add(name);
+      }
+    }
+    return names;
+  }
+
+  // 顶层函数的边界：从 /^function 到下一个 /^function（本项目所有文件都是这个写法）。
+  const bounds = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (/^function\s+([A-Za-z_$][\w$]*)/.test(lines[index])) {
+      bounds.push({ start: index, name: /^function\s+([A-Za-z_$][\w$]*)/.exec(lines[index])[1] });
+    }
+  }
+  const moduleText = bounds.length > 0
+    ? lines.slice(0, bounds[0].start).join("\n")
+    : source;
+  const moduleScope = declaredNames(moduleText);
+
+  const problems = [];
+  for (let b = 0; b < bounds.length; b++) {
+    const start = bounds[b].start;
+    const end = b + 1 < bounds.length ? bounds[b + 1].start : lines.length;
+    const bodyLines = lines.slice(start, end);
+    const scope = declaredNames(bodyLines.join("\n"));
+    for (let i = 0; i < bodyLines.length; i++) {
+      const withoutComment = bodyLines[i].replace(/\/\/.*$/, "");
+      for (const alias of aliases) {
+        if (moduleScope.has(alias) || scope.has(alias)) continue;
+        // 只认 `别名.` 这种成员访问，别把同名字符串和注释算进来。
+        const usage = new RegExp("(^|[^\\w$.\"'])" + alias + "\\s*\\.");
+        if (usage.test(withoutComment)) {
+          problems.push(
+            path.relative(projectRoot, filePath) + ":" + (start + i + 1) +
+              " 用了 " + alias + "，但函数 " + bounds[b].name +
+              " 内没有声明它（模块级也没有）——跑到这一行会报「" + alias + " 未定义」"
+          );
+        }
+      }
+    }
+  }
+  return problems;
+}
+
 function checkConfig() {
   const configPath = path.join(projectRoot, "src/config/game-config-autojs.js");
   delete require.cache[require.resolve(configPath)];
@@ -176,7 +264,7 @@ function checkCases() {
       ? path.dirname(casePath)
       : path.join(projectRoot, "src/assets");
     for (const node of data.nodes) {
-      if (node.type !== "tapImage" || !node.asset) continue;
+      if ((node.type !== "tapImage" && node.type !== "swipeImage") || !node.asset) continue;
       const assetPath = path.join(assetRoot, node.asset);
       if (!fs.existsSync(assetPath)) {
         throw new Error(
@@ -198,10 +286,177 @@ function checkCases() {
   return caseFiles.length;
 }
 
+// 悬浮层里 findView 的每个 id，布局里必须真有。
+//
+// 为什么值得单独做一道闸：这些文件都有一段「views 里任何一个是 null 就抛
+// 控件未找到」的护栏，而那个抛出来之后整层建不起来，调用方只拿到一个 null，
+// 表现是"点了没反应"或者"被甩回 App"——2026-10-04 用户点「编辑」被甩回 App，
+// 页面上还写着「悬浮窗权限缺失」，而权限明明是好的，查了半天。
+// 这种错纯粹是拼写/漏加，完全能在 PC 上静态查出来，不该等到真机。
+//
+// 只看同一个文件里的字面量：id 与 findView 都写成常量字符串是这几个文件的惯例，
+// 拼接出来的（"row" + i 这种）本来就查不了，跳过。
+function checkOverlayViewIds(filePath) {
+  const source = fs.readFileSync(filePath, "utf8");
+  if (source.indexOf("findView(") < 0) return [];
+
+  // 注：**没有做"同一个 id 出现两次"这道闸**。试过，误报太多——
+  // recorder / point-picker / region-picker 各自画两个窗口，两个 id="root" 是合法的，
+  // 而静态分不出"这两个 id 在不在同一个布局里"。一道会乱叫的闸比没有闸更糟：
+  // 人很快就学会无视它，真出事那次也一起无视了。
+  // 重复 id 的后果（findView 只认得到第一个，第二个成了点不动的死控件）
+  // 记在这儿提醒看代码的人，挪控件时记得删旧的那组。
+  const declared = new Set();
+  const idPattern = /\bid="([A-Za-z0-9_]+)"/g;
+  let matched;
+  while ((matched = idPattern.exec(source)) !== null) {
+    declared.add(matched[1]);
+  }
+
+  const problems = [];
+  const seen = new Set();
+  const lookupPattern = /findView\(\s*"([A-Za-z0-9_]+)"\s*\)/g;
+  while ((matched = lookupPattern.exec(source)) !== null) {
+    const id = matched[1];
+    if (declared.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    problems.push(path.relative(projectRoot, filePath) + " 找 " + id + "，布局里没有这个 id");
+  }
+
+  // 第二道：用了 views.X，却从没把 X 放进 views。
+  //
+  // **这才是真正咬人的那一类。** 2026-10-04：加「连续点击」按钮时 XML 里加了、
+  // 代码里用了，唯独忘了在 views 里把它取出来那一行。
+  // 于是 views 上那个键是 undefined，接线时 TypeError，整层建不起来——
+  // 而那段「控件未找到」的护栏只遍历 views 里**已有的键**，漏加的它根本看不见。
+  // 第一道闸也查不出来：布局里那个 id 明明是在的。
+  //
+  // 取"赋值过的键"用 `名字: ` 这种写法：findView 取的、空数组占位的都算。
+  const assigned = new Set();
+  const assignPattern = /^\s*([A-Za-z0-9_]+)\s*:\s*(?:window\.findView\(|\[\s*\]|\{\s*\})/gm;
+  while ((matched = assignPattern.exec(source)) !== null) {
+    assigned.add(matched[1]);
+  }
+  if (assigned.size > 0) {
+    const usedSeen = new Set();
+    const usePattern = /\bviews\.([A-Za-z0-9_]+)/g;
+    while ((matched = usePattern.exec(source)) !== null) {
+      const key = matched[1];
+      if (assigned.has(key) || usedSeen.has(key)) continue;
+      usedSeen.add(key);
+      problems.push(
+        path.relative(projectRoot, filePath) + " 用了 views." + key + "，但从没把它放进 views"
+      );
+    }
+  }
+  return problems;
+}
+
+// 行数据的字段清单：launcher 的 rowOf 产出的每个字段，都必须在 step-overlay 的
+// ROW_KEYS 里（或在下面这张白名单里，带理由）。
+//
+// **这张清单已经漏过两次，两次都是同一个形状。** adoptRow 保存后只按 ROW_KEYS
+// 把新值抄回本地那份 step，漏掉的字段写盘是对的、本地那份停在旧值，于是：
+//   2026-10-04 加「连续点击」漏了 multiCount —— 用户报"填 2 确定后变回 1"，
+//     修了一轮没治住，再报"外面是 3、点进去还是 2"，两轮才看清形状
+//   2026-10-06 加「循环分组」漏了 repeat —— 用户 2026-10-08 报"默认执行 1 次，
+//     这个 2 次没办法修"：-/+ 每次都拿旧值算，从 1 按「+」得 2，再按还是 2
+//
+// 这一类 `node --check` 查不出来，纯数据探针也碰不到（它在界面回填的那一步），
+// 只有人点到那个按钮才会发现。所以用一道静态闸守着。
+//
+// 做法粗但正好卡住这一类：rowOf 返回的是一个对象字面量，键固定缩进 6 格。
+// 嵌套在里面的 IIFE 没有对象字面量，所以不会误伤。
+//
+// **这道闸守的是"一对"：step-overlay 的 ROW_KEYS 与它的调用方 launcher.rowOf。**
+// 只有一边在（模板里就是这样：浮层已经回流，而配套的 launcher 还是老的、
+// 没有 rowOf）时不该报错——那时根本没有"调用方产出的字段"这回事，
+// 报出来就是乱叫，而**一道会乱叫的闸比没有闸更糟**（本文件上面那条注释原话）。
+// 跳过时打一行字说清楚，别让它悄悄失效：真在 rxfs 里把 rowOf 改名了，
+// 那行字就会出现在 check 的输出里。
+function checkRowKeys() {
+  const overlayPath = path.join(projectRoot, "src/core/step-overlay-autojs.js");
+  const launcherPath = path.join(projectRoot, "src/core/launcher-autojs.js");
+  if (!fs.existsSync(overlayPath) || !fs.existsSync(launcherPath)) return [];
+
+  // 不用抄回去也成立的字段，每个都要有理由。
+  const exempt = new Map([
+    ["nodeId", "结构字段，只能靠关层重开变，不存在就地改"],
+    ["groupId", "同上：进出分组是重开一次层，不是改一行"]
+  ]);
+
+  const overlaySource = fs.readFileSync(overlayPath, "utf8");
+  const rowKeysBlock = /var\s+ROW_KEYS\s*=\s*\[([\s\S]*?)\]\s*;/.exec(overlaySource);
+  if (!rowKeysBlock) {
+    console.log("提示: step-overlay 里没有 ROW_KEYS，行字段闸这一轮跳过");
+    return [];
+  }
+  const rowKeys = new Set();
+  const keyPattern = /"([A-Za-z0-9_$]+)"/g;
+  let matched;
+  while ((matched = keyPattern.exec(rowKeysBlock[1])) !== null) rowKeys.add(matched[1]);
+
+  const launcherLines = fs.readFileSync(launcherPath, "utf8").split("\n");
+  let start = -1;
+  for (let i = 0; i < launcherLines.length; i++) {
+    if (/^\s*function\s+rowOf\s*\(/.test(launcherLines[i])) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) {
+    // 浮层还没有调用方（模板就是这个状态）。不是错，但要说一声。
+    console.log("提示: launcher 里没有 rowOf，步骤编辑层还没有调用方，行字段闸这一轮跳过");
+    return [];
+  }
+  const problems = [];
+  const produced = new Set();
+  for (let i = start; i < launcherLines.length; i++) {
+    // 下一个顶层函数就是 rowOf 的尽头。
+    if (i > start && /^function\s/.test(launcherLines[i])) break;
+    const field = /^ {6}([A-Za-z0-9_$]+)\s*:/.exec(launcherLines[i].replace(/\/\/.*$/, ""));
+    if (field) produced.add(field[1]);
+  }
+  produced.forEach(function (key) {
+    if (rowKeys.has(key) || exempt.has(key)) return;
+    problems.push(
+      "rowOf 产出了 " + key + "，但它不在 step-overlay 的 ROW_KEYS 里——" +
+        "改完之后盘上是新值、界面停在旧值（multiCount 和 repeat 都是这么漏的）"
+    );
+  });
+  return problems;
+}
+
 const sourceFiles = collectJavaScriptFiles(path.join(projectRoot, "src"));
 const scriptFiles = collectJavaScriptFiles(path.join(projectRoot, ".docs/script"));
+const scopeProblems = [];
+const viewProblems = [];
 for (const filePath of sourceFiles.concat(scriptFiles)) {
   checkSyntax(filePath);
+  scopeProblems.push(...checkRequireScopes(filePath));
+  viewProblems.push(...checkOverlayViewIds(filePath));
+}
+const rowKeyProblems = checkRowKeys();
+if (rowKeyProblems.length > 0) {
+  throw new Error(
+    "有 " + rowKeyProblems.length + " 个行字段没进 ROW_KEYS" +
+      "（表现成「改完界面不变」或「调不动」，而写盘其实是对的）:\n  " +
+      rowKeyProblems.join("\n  ")
+  );
+}
+if (viewProblems.length > 0) {
+  throw new Error(
+    "有 " + viewProblems.length + " 处悬浮层控件对不上" +
+      "（整层会建不起来，表现成「点了没反应」或被甩回 App）:\n  " +
+      viewProblems.join("\n  ")
+  );
+}
+if (scopeProblems.length > 0) {
+  throw new Error(
+    "有 " + scopeProblems.length + " 处模块别名用在了没 require 它的地方" +
+      "（跑到那一行才会炸，界面上表现成「xxx 未定义」）:\n  " +
+      scopeProblems.join("\n  ")
+  );
 }
 checkConfig();
 checkTasks();
