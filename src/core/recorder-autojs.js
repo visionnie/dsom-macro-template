@@ -36,6 +36,11 @@ var MIN_SWIPE_DURATION_MS = 120;
 var MAX_SWIPE_DURATION_MS = 3000;
 var MIN_LONG_PRESS_MS = 300;
 var MAX_LONG_PRESS_MS = 5000;
+// 两个动作之间停够这么久才记成「动作前等待」。低于它的都是连着点的节奏，
+// 记下来只会给每一步都挂一个没意义的等待。
+var MIN_RECORDED_WAIT_MS = 400;
+// 记得下的最长等待，与回放器的 MAX_PRE_WAIT_MS 对齐（1 小时）。
+var MAX_RECORDED_WAIT_MS = 3600000;
 var FORWARD_SETTLE_MS = 180;
 // 等「捕获层已让出触摸」的上限，以及确认之后再多留的一拍。
 var TOUCHABLE_WAIT_MS = 800;
@@ -158,13 +163,17 @@ function forwardGesture(gesture) {
 }
 
 // 会话目录：<outputRoot>/recordings/<sessionId>/
-function createSession(config) {
+// name 可选：从「＋ 新建任务」进来时，名字是人在开录之前就填好的
+// （2026-10-04 用户要求：创建任务填完名字直接就该是录制，不该录完再回头取名）。
+// 不给就留空，由复核页取名——「打开已有录制」那条路仍然成立。
+function createSession(config, name) {
   var sessionId = String(Date.now());
   var dir = config.outputRoot + "/recordings/" + sessionId;
   files.ensureDir(dir + "/");
   return {
     id: sessionId,
     dir: dir,
+    name: name || "",
     startedAt: Date.now(),
     nodes: [],
     shots: []
@@ -235,12 +244,20 @@ function addGestureNode(session, gesture, nodeId, shotPath, gapMs) {
     recordedCase.defaultNodeName(session.nodes.length + 1, gesture.type),
     shotPath
   );
-  // 两个动作之间人停顿了多久，就是这一步之后界面需要多久——比拍脑袋填默认值准。
-  // 只在停顿明显时才写，避免给每一步都塞一个没意义的等待。
-  // **按"上一步做完 -> 这一步按下"算**，不含按住的那段：长按 2 秒是动作本身的时长，
-  // 算进等待里的话每条长按后面都会白挂一个两秒的停顿。
-  if (gapMs != null && gapMs > 400) {
-    built.node.postWaitMs = Math.min(10000, Math.round(gapMs / 100) * 100);
+  // 两个动作之间人停了多久，就是**这一步动作之前**要等多久，写进 preWaitMs。
+  //
+  // **2026-09-30 改了归属**：以前记的是同一个 gap，却写进这一步的 postWaitMs
+  // （动作之后等多久），整条链错一位——第 1 步点完立刻打第 2 步，
+  // 而第 2 步该等的那段被挪到它自己后面去了。人等的那五分钟是下一个动作的前提，
+  // 不是上一个动作的尾巴（用户 2026-09-30 的原话与参考产品的面板排法都是这样）。
+  //
+  // **按"上一步抬手 -> 这一步按下"算**，不含按住的那段：长按 2 秒是动作本身的时长，
+  // 算进等待里的话每条长按前面都会白挂一个两秒的停顿。
+  //
+  // 上限从 10 秒放到 1 小时：游戏里「等体力」「等冷却」本来就是十几二十分钟起步，
+  // 而原来那个 10 秒的夹子会把一段 20 分钟的真实等待悄悄记成 10 秒。
+  if (gapMs != null && gapMs > MIN_RECORDED_WAIT_MS) {
+    built.node.preWaitMs = Math.min(MAX_RECORDED_WAIT_MS, Math.round(gapMs / 100) * 100);
   }
   session.nodes.push(built.node);
   session.shots.push(built.shot);
@@ -279,7 +296,7 @@ function saveSession(session) {
 function start(context, config, onStop, options) {
   var opts = options || {};
   var continuing = !!opts.session;
-  var session = opts.session || createSession(config);
+  var session = opts.session || createSession(config, opts.name);
   // 继续录制时，「放弃」只该丢掉这一趟新加的，不能把之前录好的一起删了。
   var baseNodeCount = session.nodes.length;
   var screen = context.screen;
@@ -1010,7 +1027,7 @@ function listSessions(config, limit) {
       var session = loadSession(dir);
       var upgraded = 0;
       for (var n = 0; n < session.nodes.length; n++) {
-        if (session.nodes[n].type === "tapImage") upgraded++;
+        if (recordedCase.usesImage(session.nodes[n])) upgraded++;
       }
       row.stepCount = session.nodes.length;
       row.upgradedCount = upgraded;
@@ -1033,6 +1050,9 @@ module.exports = {
   captureOneGesture: captureOneGesture,
   shotFileName: shotFileName,
   buildGestureNode: buildGestureNode,
+  // 往会话末尾追加一步。导出它是为了能在 PC 上验「停顿记在哪一步身上」——
+  // 这条 2026-09-30 之前错了一位，光看代码看不出来，得喂数据跑。
+  addGestureNode: addGestureNode,
   // 识别规则只有这一份。导出它是为了能在 PC 上直接喂坐标验阈值——
   // 手势这种东西上真机之前先把边界算清楚，比在设备前反复划便宜得多。
   gestureThresholds: gestureThresholds,

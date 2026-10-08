@@ -3,11 +3,16 @@
 // 坐标与页面阈值应放进具体任务，避免无关任务共享易变配置
 // =====================================================================
 
+// 版本号单独一个文件，因为它每次打包都要改，而本文件基本不动。
+// 挂在 config 上，界面、运行时、日志就都能读到——它们本来就都拿得到 config。
+var appVersion = require("./version-autojs.js");
+
 module.exports = {
   project: {
     id: "template",
     name: "DSOM Macro Template"
   },
+  version: appVersion,
   game: {
     packageName: ""
   },

@@ -140,6 +140,30 @@ function removeEntry(config, entryId) {
   return { removed: true, overlay: overlay };
 }
 
+// 按 taskId 摘掉所有指向它的增补项。删一条录制时要用：
+// 调度项是按自己的 id 存的，光有会话 id 找不到它；而同一条录制理论上可以
+// 被挂成多个调度项（不同时间窗），所以是全删、返回删了几条，不是删第一条。
+// 只动设备侧增补层，代码基表里的调度项不在这儿，也不该被设备上的操作改掉。
+function removeByTaskId(config, taskId) {
+  var overlay = load(config);
+  var entries = overlay.entries || [];
+  var kept = [];
+  var removed = [];
+  for (var i = 0; i < entries.length; i++) {
+    if (String(entries[i].taskId) === String(taskId)) {
+      removed.push(entries[i].id);
+    } else {
+      kept.push(entries[i]);
+    }
+  }
+  if (removed.length === 0) {
+    return { removed: [], overlay: overlay };
+  }
+  overlay.entries = kept;
+  save(config, overlay);
+  return { removed: removed, overlay: overlay };
+}
+
 module.exports = {
   OVERLAY_VERSION: OVERLAY_VERSION,
   overlayPathOf: overlayPathOf,
@@ -148,5 +172,6 @@ module.exports = {
   save: save,
   merge: merge,
   addEntry: addEntry,
-  removeEntry: removeEntry
+  removeEntry: removeEntry,
+  removeByTaskId: removeByTaskId
 };

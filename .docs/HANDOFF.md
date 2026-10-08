@@ -3,12 +3,81 @@
 ## 下次启动，第一件事
 
 ```text
-2026-09-30 从 rxfs 回流了「回放与录制内核」，但**界面层还是老的**（见下）。
-下一件要么是补完界面层回流（B 轮：launcher / runtime / 三个浮层 / 任务列表），
-要么等真要接第二个游戏时再动——那时才知道那个游戏的界面该长什么样。
+2026-10-08 第二轮回流走完（模板 v0.4.0）：rxfs v0.13.0 ~ v0.40.0 的**内核与
+通用浮层**全部回来了，`src/core` 现在只差一个文件——`launcher-autojs.js`。
 
-回流完这一轮之后，模板与 rxfs 的 src/core 还差 8 个文件（见下方清单）。
+**剩下的就是 B 轮，而 B 轮只有一件事：拆 launcher。**
+rxfs 那份已经 7000 多行，游戏语义（盒子导航、登录流程、BOSS 调度项）与通用
+界面（任务列表、录制复核、运行记录、权限页）混在一条文件里。这一轮回流的
+十个通用浮层**在模板里暂时没有调用方**，它们就是给 B 轮备的现货——
+拆出来的通用 launcher 会去 require 它们。
+
+**什么时候动 B 轮：真要接第二个游戏的时候。** 现在拆是照着 rxfs 一家的样子
+去猜"通用界面长什么样"，接第二个游戏时才有第二个样本，拆出来的边界才站得住。
+（这条判断 09-30 就定了，这一轮没有改。）
+
+本轮回流带进来的全部来自 rxfs 实机验收通过的版本，**但模板侧一行都没有实机验过**——
+真机证据全部来自 rxfs v0.40.0。模板侧只验到 check / build / 生成新项目这三关。
 ```
+
+## 2026-10-08 回流自 rxfs v0.40.0：内核与通用浮层（A 轮第二次）
+
+rxfs 侧 v0.13.0 ~ v0.40.0 共二十多轮，全部由项目所有者实机验收通过。
+**模板从 v0.3.0 之后没有任何独立提交，所以两边不存在"各改各的"**，
+这一轮是整文件覆盖，不是逐处挑拣。
+
+**进来了**（更新 14 个 + 新增 11 个）：
+
+| 文件 | 带进来什么 |
+|---|---|
+| `case/recorded-case-autojs.js` | 等待记在动作之前（`preWaitMs`）、空等待节点、连续点击、认字两种节点、循环分组（平铺 + id 引用）、剪贴板式复制粘贴、`bareName`（名字里不再腌序号） |
+| `case/case-runner-autojs.js` | 上面那些节点类型的回放、分组的 `runGroup`、`entry` 从指定节点起跑 |
+| `recorded-task-autojs.js` | `recorded:` / `group:` 两种任务的解析与包装 |
+| `resident-autojs.js` | 定时执行那一整套：单调时钟对账、跳表补跑、守望线程、每趟自己的运行目录与前后两张截图 |
+| `runtime-autojs.js` | 运行目录形状、`toPathSegment`、构建戳进 result.json |
+| `logger-autojs.js` | **每一行当场落盘**（原先攒在内存里，只有 flush 才写）、轮转、分支 |
+| `run-lock-autojs.js` | 心跳的 sleep 挪进 try（被中断就老实 release，别把锁丢在盘上） |
+| `run-control-autojs.js` / `actions` / `screen` / `ocr` / `recorder` / `permissions` / `schedule-store` | 检查点、连续点击、认字引擎二选一、截图前让开等 |
+| **新增** `step-overlay` / `run-overlay` / `schedule-overlay` / `pick-overlay` / `overlay-keyboard` | 游戏内编辑层、运行待命层、定时层、切任务层、悬浮窗键盘焦点 |
+| **新增** `task-store` / `task-group` / `task-group-store` | 任务列表与组合任务 |
+| **新增** `app-version` + `config/version-autojs.js` | 版本可见机制（菜单、日志、result.json、APK 文件名四处对账） |
+| **新增** `text-input` | 往输入框打字 |
+
+**脚本侧一并回流**（`.docs/script/`）：`check-autojs-project.js` 的三道闸
+（require 作用域、悬浮层控件 id、行字段 ROW_KEYS）、`build-autojs-bundles.js`
+的构建戳、`build-autojs-project.js` 的版本号一致性闸与 `--run-on-boot`。
+
+**仍然故意没进来**：`launcher-autojs.js`（见上，B 轮）。
+
+### 这一轮为回流本身改的三处
+
+1. **ROW_KEYS 那道闸改成"没有调用方就跳过并说一声"。** 它守的是一对东西——
+   step-overlay 的 `ROW_KEYS` 与调用方 `launcher.rowOf`。模板里浮层回来了、
+   配套 launcher 还没有，闸直接报错就是乱叫，而**一道会乱叫的闸比没有闸更糟**
+   （check 脚本自己的原话）。跳过时打一行字，别让它悄悄失效。
+   改完同步回 rxfs，两边一字不差；在 rxfs 上反验过闸仍然报得出来。
+2. **补上 `src/config/version-autojs.js`**：回流的 `build-autojs-project.js`
+   硬 require 它，而模板没有这个文件，`npm run project` 会直接崩。
+   `game-config` 跟着挂上 `version: appVersion`。
+3. **新项目的版本号重置成 0.1.0**（`create-game-project.js`）：继承模板的 0.4.0
+   会让人以为这个新游戏已经迭代过四轮；而 package.json 与 version-autojs.js
+   必须一头一致，否则新项目第一次打包就被版本闸卡住。
+
+### 去掉的游戏语义
+
+四处点名 rxfs 的注释改成了泛指（`resident` 的"以 rxfs 为例"、`runtime` 的
+素材路径举例、`screen` 的 `btn-boss-feast` 实测表、`task-group` 的 LOGINRXFS）。
+泛指的「BOSS 那类按时间窗跑的」保留——那是通用游戏概念，不是 rxfs 的东西。
+
+### 验到哪儿
+
+`npm run check` 过、`npm run build` 过（37 个模块；十个新浮层没有调用方，
+按 require 走的 bundler 不会收进去，与 09-30 的 point-picker 一样）、
+`npm run project` 过。**又实际生成了一个新项目**，它自己的 check / build /
+project 全过，十个新文件逐个核过在不在、版本号是不是 0.1.0——
+这份清单漏文件的后果是新项目跑到那句 require 才炸，而模板自己一切正常。
+
+**模板侧没有实机验证**：真机证据全部来自 rxfs v0.40.0。
 
 ## 2026-09-30 回流自 rxfs：回放与录制内核（A 轮）
 
@@ -61,9 +130,12 @@ check / build 也过；rxfs 那两个纯数据探针（用例校验、类型互�
 ## 当前状态
 
 **开发分支**：`test`　**稳定分支**：`main`（不直接提交，由 `test` 验证通过后合入）  
-**最近一次 release / tag**：`v0.3.0`（2026-09-30，回流 rxfs v0.12.0 的回放与录制内核），已推送到 origin  
+**最近一次 release / tag**：`v0.3.0`（2026-09-30，回流 rxfs v0.12.0 的回放与录制内核）  
+**`test` 上待发版**：`v0.4.0`（2026-10-08，回流 rxfs v0.40.0 的内核与通用浮层）——
+合并 `main` 与打 tag 要项目所有者明确要求  
 （这一行以前写着 `v0.1.0`，而 `main` 上早已是 `v0.2.0` —— 发版时顺手改它，
 `package.json` 的 `version` 也跟着走，别再留一个说不清版本的仓库）  
+**`src/core` 与 rxfs 的差距**：只剩 `launcher-autojs.js` 一个文件（B 轮）  
 **进行中**：通用模板六轮迭代完成，JSON 用例引擎已回流，打包成独立 APK 的链路已通。
 **2026-09-15 回流自 rxfs**：录制器框锚点 / 生成用例 / 回放（`case/recorded-case-autojs.js`、
 用例 `assetBase: "case"`），以及切前台修复（`foreground-autojs.js`：UI 模式下

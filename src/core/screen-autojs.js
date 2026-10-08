@@ -152,8 +152,8 @@ function create(options) {
   //
   // 2026-09-17 在主城画面上实测（同一张固化截图，findImage）：
   //
-  //     自裁块 120x36        level 0 命中 / level 1 未命中 / 默认未命中
-  //     btn-boss-feast 58x40 level 0 命中 / level 1 命中   / 默认命中
+  //     自裁块 120x36    level 0 命中 / level 1 未命中 / 默认未命中
+  //     按钮锚点 58x40   level 0 命中 / level 1 命中   / 默认命中
   //
   // 也就是说 level 1 **不是**总会失效，但 level 0 在实测里从没比它差过。
   // 漏匹配是静默的（任务照跑，只是永远找不到），排查成本远高于多花的那点匹配时间，
@@ -203,6 +203,27 @@ function create(options) {
     }
   }
 
+  // 认一遍当前屏幕有哪些文字。给「点击文字」用，也给界面上的「认一下」用——
+  // 两处必须走同一条路：人在面板上看到的词，就是回放时拿去匹配的词。
+  // 走 withCapture 是必须的：悬浮层要先让开，否则把自己的界面也认进去了
+  // （找图踩过同样的坑，表现是稳定失败且看不出根因）。
+  function detectTexts(detectOptions) {
+    ensurePermission();
+    var ocrApi = require("./ocr-autojs.js").create({ logger: logger });
+    return withCapture(function (screenImage) {
+      return ocrApi.detect(screenImage, detectOptions);
+    });
+  }
+
+  // 找这段文字在哪儿。找不到返回 null，由调用方决定是重试还是判失败。
+  function findText(wanted, findOptions) {
+    ensurePermission();
+    var ocrApi = require("./ocr-autojs.js").create({ logger: logger });
+    return withCapture(function (screenImage) {
+      return ocrApi.find(screenImage, wanted, findOptions);
+    });
+  }
+
   return {
     requestPermission: requestPermission,
     hasPermission: function () {
@@ -213,7 +234,9 @@ function create(options) {
     saveTo: saveTo,
     getRgb: getRgb,
     waitFor: waitFor,
-    findTemplate: findTemplate
+    findTemplate: findTemplate,
+    detectTexts: detectTexts,
+    findText: findText
   };
 }
 

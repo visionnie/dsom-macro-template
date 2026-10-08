@@ -13,6 +13,7 @@ const path = require("path");
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const config = require(path.join(projectRoot, "src/config/game-config-autojs.js"));
+const appVersion = require(path.join(projectRoot, "src/config/version-autojs.js"));
 
 // 以下字段名与取值取自 AutoJs6 6.7 打包界面回写的 project.json，不是猜的。
 // 支持库用 libs 控制，取值是界面上的可读名称。
@@ -51,6 +52,38 @@ function readArgument(name, defaultValue) {
 
 function hasFlag(name) {
   return process.argv.includes(name);
+}
+
+// versionCode 由版本号推出来，不单独维护：两个要人同步的数字必然有一天对不上，
+// 而 Android 只看 versionCode，对不上的后果是「明明装了新包，系统认为是旧的」。
+function deriveVersionCode(versionName) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(versionName);
+  if (!match) {
+    throw new Error(
+      "版本号必须形如 0.6.0（三段数字），当前为: " + versionName
+    );
+  }
+  return (
+    Number(match[1]) * 10000 + Number(match[2]) * 100 + Number(match[3])
+  );
+}
+
+// package.json 的 version 与 src/config/version-autojs.js 必须一致：
+// 前者是 Git 标签对齐的依据（见 RULES.md 分支规则），后者是设备上显示的版本。
+// 两边不一致就意味着「设备上显示 0.6.0，标签打的却是 0.5.0」，
+// 那时候谁也说不清手里这个包到底是什么。宁可现在拒绝生成。
+function assertVersionInSync(versionName) {
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  const packageJson = JSON.parse(
+    fs.readFileSync(packageJsonPath, "utf8").replace(/^﻿/, "")
+  );
+  if (packageJson.version !== versionName) {
+    throw new Error(
+      "版本号不一致：package.json 是 " + packageJson.version +
+        "，src/config/version-autojs.js 是 " + versionName +
+        "。改版本要同时改这两处"
+    );
+  }
 }
 
 function assertValidPackageName(packageName) {
@@ -101,8 +134,22 @@ const packageName = readArgument(
 );
 assertValidPackageName(packageName);
 
-const versionName = readArgument("--version-name", "1.0.0");
-const versionCode = Number(readArgument("--version-code", "1"));
+// 默认值来自 src/config/version-autojs.js，那是版本号的唯一事实来源。
+// 原先这里硬编码 "1.0.0"，于是每个包的版本名都一样，装完谁也看不出装的是哪一轮。
+const versionName = readArgument("--version-name", appVersion.name);
+if (versionName === appVersion.name) {
+  assertVersionInSync(versionName);
+} else {
+  // 显式覆盖是留给临时包的（比如给人试一版而不想动版本号），但必须吵一声：
+  // 打出来的包和仓库里写的版本对不上，事后翻起来只会更费劲。
+  console.warn(
+    "警告: --version-name 覆盖了配置里的 " + appVersion.name +
+      "，这个包与仓库记录的版本对不上"
+  );
+}
+const versionCode = Number(
+  readArgument("--version-code", String(deriveVersionCode(versionName)))
+);
 if (!Number.isInteger(versionCode) || versionCode < 1) {
   throw new Error("--version-code 必须是正整数");
 }

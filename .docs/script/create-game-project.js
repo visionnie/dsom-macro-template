@@ -38,6 +38,10 @@ const genericPaths = [
   "src/README.md",
   "src/assets/README.md",
   "src/config/game-config-autojs.js",
+  // 版本号那个文件（2026-10-08 回流）。**必须进清单**：game-config 第一行就
+  // require 它，漏了的话生成出来的新项目连配置都读不进来。
+  // 生成时它会被重置成 0.1.0，见 renderProjectVersion。
+  "src/config/version-autojs.js",
   "src/config/schedule-autojs.js",
   "src/core/actions-autojs.js",
   "src/core/capture-session-autojs.js",
@@ -69,6 +73,20 @@ const genericPaths = [
   "src/core/schedule-store-autojs.js",
   "src/core/screen-autojs.js",
   "src/core/workflow-autojs.js",
+  // 2026-10-08 回流带进来的十个。同上：**加了 core 文件就要加进这份清单**。
+  // 这十个当前在模板里没有调用方（它们的调用方是 B 轮才拆得出来的 launcher），
+  // 所以不会进 bundle；留在这儿是给 B 轮备的现货，和 point-picker / region-picker
+  // 当初一样。
+  "src/core/app-version-autojs.js",
+  "src/core/overlay-keyboard-autojs.js",
+  "src/core/pick-overlay-autojs.js",
+  "src/core/run-overlay-autojs.js",
+  "src/core/schedule-overlay-autojs.js",
+  "src/core/step-overlay-autojs.js",
+  "src/core/task-group-autojs.js",
+  "src/core/task-group-store-autojs.js",
+  "src/core/task-store-autojs.js",
+  "src/core/text-input-autojs.js",
   "src/entry/main-autojs.js",
   // 入口拆成 auto + ui 两个文件后漏了这一个，生成出来的新项目会没有菜单界面。
   // 别删：main-autojs.js 只负责分派，菜单在这里。
@@ -154,14 +172,30 @@ function renderProjectConfig(content, values) {
     );
 }
 
+// 新项目的版本号从 0.1.0 重新数（2026-10-08）。
+// 继承模板当前的版本号（比如 0.4.0）只会让人以为这个新游戏已经迭代过四轮；
+// 而 package.json 与 version-autojs.js 必须一头一致，否则
+// build-autojs-project.js 的版本闸会拒绝生成项目——新项目第一次打包就卡住。
+const NEW_PROJECT_VERSION = "0.1.0";
+
 function writeProjectConfig(targetPath, values) {
   const configPath = path.join(targetPath, "src/config/game-config-autojs.js");
   const content = renderProjectConfig(fs.readFileSync(configPath, "utf8"), values);
   fs.writeFileSync(configPath, content, "utf8");
 
+  const versionPath = path.join(targetPath, "src/config/version-autojs.js");
+  const versionContent = fs
+    .readFileSync(versionPath, "utf8")
+    .replace(/name:\s*"[^"]+"/, 'name: "' + NEW_PROJECT_VERSION + '"');
+  if (versionContent.indexOf('"' + NEW_PROJECT_VERSION + '"') < 0) {
+    throw new Error("版本号重置失败：src/config/version-autojs.js 的写法变了");
+  }
+  fs.writeFileSync(versionPath, versionContent, "utf8");
+
   const packagePath = path.join(targetPath, "package.json");
   const packageConfig = JSON.parse(fs.readFileSync(packagePath, "utf8"));
   packageConfig.name = "dsom-macro-" + values.projectId;
+  packageConfig.version = NEW_PROJECT_VERSION;
   fs.writeFileSync(packagePath, JSON.stringify(packageConfig, null, 2) + "\n", "utf8");
 
   const readmePath = path.join(targetPath, "README.md");

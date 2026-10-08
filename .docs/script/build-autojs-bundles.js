@@ -10,9 +10,56 @@
 
 const fs = require("fs");
 const path = require("path");
+const childProcess = require("child_process");
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const sourceRoot = path.join(projectRoot, "src");
+
+// ---- 构建戳 ----
+// 「设备上装的到底是哪一轮的包」这个问题，语义版本只答了一半：版本号是手写的，
+// 忘了改就一直是老数字。提交号与打包时间是构建那一刻才成立的事实，忘不掉。
+//
+// 为什么写进产物而不是写成 src 下的一个文件：src 是要提交的，每次构建都往里写
+// 会把仓库弄脏，`git status` 从此永远不干净，真正的改动就藏在噪声里了。
+function runGit(args) {
+  const result = childProcess.spawnSync("git", args, {
+    cwd: projectRoot,
+    encoding: "utf8"
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return String(result.stdout).trim();
+}
+
+function formatBuildTime(date) {
+  function pad(value) {
+    return value < 10 ? "0" + value : String(value);
+  }
+  // 本地时间，且不用 toLocaleString——它的格式随机器的区域设置变，
+  // 同一份产物在两台机器上打出来会长得不一样。
+  return (
+    date.getFullYear() +
+    "-" + pad(date.getMonth() + 1) +
+    "-" + pad(date.getDate()) +
+    " " + pad(date.getHours()) +
+    ":" + pad(date.getMinutes())
+  );
+}
+
+function readBuildStamp() {
+  const commit = runGit(["rev-parse", "--short", "HEAD"]);
+  const status = runGit(["status", "--porcelain"]);
+  return {
+    commit: commit || "未知",
+    // 查不出来时给 null 而不是 false：「没有未提交改动」和「不知道有没有」
+    // 是两件事，后者不该被显示成前者。
+    dirty: status === null ? null : status !== "",
+    builtAt: formatBuildTime(new Date())
+  };
+}
+
+const buildStamp = readBuildStamp();
 
 function readArgument(name, defaultValue) {
   const index = process.argv.indexOf(name);
@@ -137,6 +184,12 @@ function buildBundle(entryPath, outputPath) {
     "// 此文件由 .docs/script/build-autojs-bundles.js 生成，请勿直接编辑。",
     JSON.stringify(entryDirective) + ";",
     "",
+    // 构建戳放在模式指令之后、模块表之前：这里是脚本作用域，
+    // 每个模块函数都是在同一个作用域里定义的，闭包能看到这个 var。
+    // 读它的是 core/app-version-autojs.js，那边用 typeof 兜底，
+    // 所以直接跑未打包的源码（没有这一行）也不会炸，只是少显示提交号和时间。
+    "var __BUILD_STAMP__ = " + JSON.stringify(buildStamp) + ";",
+    "",
     "(function (modules) {",
     "  var cache = {};",
     "  function require(moduleId) {",
@@ -194,3 +247,11 @@ for (const job of jobs) {
       "（" + readEntryDirective(job.entry) + " 模式，" + moduleCount + " 个模块）"
   );
 }
+
+// 打完一定要把构建戳打出来：它就是「装上去之后该在界面上看到什么」，
+// 对不上就说明装的不是这一次打的包。
+console.log(
+  "构建戳: " + buildStamp.commit +
+    (buildStamp.dirty === true ? "+（有未提交改动）" : "") +
+    "  " + buildStamp.builtAt
+);

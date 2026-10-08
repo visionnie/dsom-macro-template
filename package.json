@@ -1,6 +1,6 @@
 {
   "name": "dsom-macro-template",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "DSOM 可复用 AutoJs6 游戏自动化项目模板",
   "scripts": {
